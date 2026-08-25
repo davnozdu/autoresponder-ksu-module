@@ -7,7 +7,7 @@ NLS="$PKG/$PKG.notif.NotifListenerService"
 ROLE=android.app.role.CALL_SCREENING
 APK="$MODDIR/AutoResponder.apk"
 LOG="$MODDIR/watchdog.log"
-INTERVAL=600   # период перепроверки, сек
+INTERVAL=300   # период перепроверки, сек
 
 log() { echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
 trim() { tail -n 400 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
@@ -80,6 +80,15 @@ assert_all() {
         esac
       fi ;;
   esac
+
+  # 5a) Форс-ребинд listener: включён в настройках, но реально не подключён (упал) -> пересоздать.
+  if pm path "$PKG" >/dev/null 2>&1; then
+    if ! dumpsys notification 2>/dev/null | grep -q "ComponentInfo{$NLS} (user 0): android.service.notification.INotificationListener"; then
+      cmd notification disallow_listener "$NLS" >/dev/null 2>&1
+      cmd notification allow_listener "$NLS" >/dev/null 2>&1
+      log "recover: listener rebind (was not bound)"; changed=1
+    fi
+  fi
 
   # 5b) Доступ к политике «Не беспокоить» (чтобы уважать приоритетных отправителей)
   cmd notification allow_dnd "$PKG" 2>/dev/null
