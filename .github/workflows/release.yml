@@ -37,14 +37,17 @@ jobs:
           sed -i "s/^versionCode=.*/versionCode=$CODE/" module.prop
           cat module.prop
 
-      - name: Bundle latest app APK (optional)
-        if: env.APP_REPO_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
+      - name: Bundle latest app APK from public release
         run: |
-          gh release download --repo davnozdu/autoresponder-app --pattern 'AutoResponder*.apk' --dir . || true
-          APK=$(ls AutoResponder*.apk 2>/dev/null | head -1 || true)
-          if [ -n "$APK" ]; then mv "$APK" AutoResponder.apk; echo "bundled $APK"; else echo "no app apk found"; fi
+          URL=$(curl -sL https://api.github.com/repos/davnozdu/autoresponder-app/releases/latest             | grep -o '"browser_download_url": *"[^"]*AutoResponder[^"]*\.apk"'             | head -1 | sed 's/.*"browser_download_url": *"//; s/"$//')
+          if [ -n "$URL" ]; then
+            echo "downloading $URL"
+            curl -sL -o AutoResponder.apk "$URL"
+            ls -la AutoResponder.apk
+            echo "1" > apk.versionCode
+          else
+            echo "no app apk found in latest release; shipping without bundled apk"
+          fi
 
       - name: Package module zip
         run: |
