@@ -98,6 +98,9 @@ assert_all() {
   cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" AUTO_START allow 2>/dev/null
 
+  # Проверка обновления приложения (self-throttle 24ч)
+  ( sh "$MODDIR/app-update.sh" ) 2>/dev/null &
+
   [ "$changed" = "1" ] && log "state changed -> re-asserted"
   return 0
 }
