@@ -72,6 +72,9 @@ assert_all() {
     *) settings put secure enabled_notification_listeners "$cur:$NLS" 2>/dev/null && changed=1 ;;
   esac
 
+  # 5b) Доступ к политике «Не беспокоить» (чтобы уважать приоритетных отправителей)
+  cmd notification allow_dnd "$PKG" 2>/dev/null
+
   # 6) appops автозапуск/фон (идемпотентно, без шумного лога)
   cmd appops set "$PKG" RUN_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow 2>/dev/null
