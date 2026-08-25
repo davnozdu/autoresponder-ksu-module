@@ -1,7 +1,7 @@
 id=autoresp_ksu
 name=Auto SMS/Call Responder
 version=v0.1.0
-versionCode=1
+versionCode=010
 author=davnozdu
 description=Provisions and protects the Auto-Responder app (grants runtime perms, assigns CALL_SCREENING role, enables notification listener, Doze whitelist). Supports self-update.
 updateJson=https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/update.json

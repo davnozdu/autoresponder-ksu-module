@@ -1,6 +1,6 @@
 {
   "version": "v0.1.0",
-  "versionCode": 1,
-  "zipUrl": "https://github.com/davnozdu/autoresponder-ksu-module/releases/latest/download/autoresponder-ksu-module.zip",
+  "versionCode": 010,
+  "zipUrl": "https://github.com/davnozdu/autoresponder-ksu-module/releases/download/v0.1.0/autoresponder-ksu-module.zip",
   "changelog": "https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/CHANGELOG.md"
 }
