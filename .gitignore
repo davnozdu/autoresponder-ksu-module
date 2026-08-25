@@ -1,0 +1,5 @@
+provision.log
+*.apk
+apk.versionCode
+autoresponder-ksu-module.zip
+.DS_Store

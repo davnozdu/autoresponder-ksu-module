@@ -1,0 +1,18 @@
+#!/sbin/sh
+#################
+# Magisk / KernelSU module installer
+# KernelSU manager reads customize.sh directly; Magisk runs this script.
+#################
+umask 022
+OUTFD=$2
+ZIPFILE=$3
+mount /data 2>/dev/null
+# Подхватываем util_functions от Magisk и выполняем стандартную установку модуля.
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+  . /data/adb/magisk/util_functions.sh
+  install_module
+  exit 0
+fi
+# Fallback: если запущено вне Magisk (например, ручной флэш) — сообщаем.
+echo "! This module is meant to be flashed via KernelSU or Magisk manager."
+exit 1

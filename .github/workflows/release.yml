@@ -1,0 +1,91 @@
+name: Build & Release module
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync module.prop version
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          CODE=$(echo "$TAG" | tr -dc '0-9')
+          sed -i "s/^version=.*/version=$TAG/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=$CODE/" module.prop
+          cat module.prop
+
+      - name: (Optional) bundle latest app APK
+        if: ${{ secrets.APP_REPO_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
+        run: |
+          set -e
+          gh release download --repo davnozdu/autoresponder-app --pattern 'AutoResponder*.apk' --dir . || true
+          APK=$(ls AutoResponder*.apk 2>/dev/null | head -1 || true)
+          if [ -n "$APK" ]; then
+            mv "$APK" AutoResponder.apk
+            echo "bundled $APK"
+          else
+            echo "no app apk found in autoresponder-app releases; shipping without bundled apk"
+          fi
+
+      - name: Package module zip
+        run: |
+          NAME=autoresponder-ksu-module.zip
+          zip -r "$NAME" .             -x '.git/*' -x '.github/*' -x '*.md' -x 'provision.log'
+          unzip -l "$NAME"
+
+      - name: Bump update.json
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          CODE=$(echo "$TAG" | tr -dc '0-9')
+          cat > update.json <<JSON
+          {
+            "version": "$TAG",
+            "versionCode": $CODE,
+            "zipUrl": "https://github.com/davnozdu//releases/download/$TAG/autoresponder-ksu-module.zip",
+            "changelog": "https://raw.githubusercontent.com/davnozdu//main/CHANGELOG.md"
+          }
+          JSON
+        env:
+          MOD_REPO: autoresponder-ksu-module
+
+      - name: Commit update.json to main
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git stash --include-untracked || true
+          git fetch origin main
+          git checkout -B main origin/main
+          git stash pop || true
+          git add update.json module.prop
+          git commit -m "ci: update.json -> ${{ steps.ver.outputs.tag }}" || echo "nothing to commit"
+          git push origin main || echo "push skipped"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: autoresponder-ksu-module.zip
+          generate_release_notes: true
