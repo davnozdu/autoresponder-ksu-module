@@ -65,11 +65,20 @@ assert_all() {
   fi
 
   # 5) Notification listener (для v2)
+  # allow_listener сам пишет в enabled_notification_listeners; прямая правка
+  # settings молча не закрепляется и заставляла watchdog «чинить» это каждый цикл.
   cur=$(settings get secure enabled_notification_listeners 2>/dev/null)
   case "$cur" in
     *"$NLS"*) : ;;
-    null|"") settings put secure enabled_notification_listeners "$NLS" 2>/dev/null && changed=1 ;;
-    *) settings put secure enabled_notification_listeners "$cur:$NLS" 2>/dev/null && changed=1 ;;
+    *)
+      if cmd notification allow_listener "$NLS" >/dev/null 2>&1; then
+        log "recover: notification listener allowed"; changed=1
+      else
+        case "$cur" in
+          null|"") settings put secure enabled_notification_listeners "$NLS" 2>/dev/null ;;
+          *) settings put secure enabled_notification_listeners "$cur:$NLS" 2>/dev/null ;;
+        esac
+      fi ;;
   esac
 
   # 5b) Доступ к политике «Не беспокоить» (чтобы уважать приоритетных отправителей)
