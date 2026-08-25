@@ -15,6 +15,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      APP_REPO_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,9 +24,9 @@ jobs:
         id: ver
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync module.prop version
@@ -35,41 +37,26 @@ jobs:
           sed -i "s/^versionCode=.*/versionCode=$CODE/" module.prop
           cat module.prop
 
-      - name: (Optional) bundle latest app APK
-        if: ${{ secrets.APP_REPO_TOKEN != '' }}
+      - name: Bundle latest app APK (optional)
+        if: env.APP_REPO_TOKEN != ''
         env:
           GH_TOKEN: ${{ secrets.APP_REPO_TOKEN }}
         run: |
-          set -e
           gh release download --repo davnozdu/autoresponder-app --pattern 'AutoResponder*.apk' --dir . || true
           APK=$(ls AutoResponder*.apk 2>/dev/null | head -1 || true)
-          if [ -n "$APK" ]; then
-            mv "$APK" AutoResponder.apk
-            echo "bundled $APK"
-          else
-            echo "no app apk found in autoresponder-app releases; shipping without bundled apk"
-          fi
+          if [ -n "$APK" ]; then mv "$APK" AutoResponder.apk; echo "bundled $APK"; else echo "no app apk found"; fi
 
       - name: Package module zip
         run: |
-          NAME=autoresponder-ksu-module.zip
-          zip -r "$NAME" .             -x '.git/*' -x '.github/*' -x '*.md' -x 'provision.log'
-          unzip -l "$NAME"
+          zip -r autoresponder-ksu-module.zip . -x '.git/*' -x '.github/*' -x '*.md' -x 'provision.log'
+          unzip -l autoresponder-ksu-module.zip
 
       - name: Bump update.json
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           CODE=$(echo "$TAG" | tr -dc '0-9')
-          cat > update.json <<JSON
-          {
-            "version": "$TAG",
-            "versionCode": $CODE,
-            "zipUrl": "https://github.com/davnozdu//releases/download/$TAG/autoresponder-ksu-module.zip",
-            "changelog": "https://raw.githubusercontent.com/davnozdu//main/CHANGELOG.md"
-          }
-          JSON
-        env:
-          MOD_REPO: autoresponder-ksu-module
+          printf '%s\n'             '{'             "  \"version\": \"$TAG\","             "  \"versionCode\": $CODE,"             "  \"zipUrl\": \"https://github.com/davnozdu/autoresponder-ksu-module/releases/download/$TAG/autoresponder-ksu-module.zip\","             "  \"changelog\": \"https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/CHANGELOG.md\""             '}' > update.json
+          cat update.json
 
       - name: Commit update.json to main
         run: |
