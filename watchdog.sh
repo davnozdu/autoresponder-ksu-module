@@ -52,7 +52,7 @@ assert_all() {
 
   # 3) Runtime-права (грантим только отозванные)
   for p in RECEIVE_SMS SEND_SMS READ_SMS READ_PHONE_STATE READ_CALL_LOG \
-           READ_CONTACTS POST_NOTIFICATIONS READ_PHONE_NUMBERS; do
+           READ_CONTACTS POST_NOTIFICATIONS READ_PHONE_NUMBERS WRITE_CALL_LOG; do
     full="android.permission.$p"
     if ! perm_granted "$full"; then
       pm grant "$PKG" "$full" 2>/dev/null && { log "recover: granted $p"; changed=1; }
