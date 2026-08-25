@@ -104,7 +104,10 @@ assert_all() {
 
 : > "$LOG"; log "watchdog start (pid $$)"
 wait_ready || true
+sleep 15
 assert_all
+sleep 20
+assert_all   # второй проход: dangerous-гранты, которые не прошли на раннем старте
 log "initial provisioning done"
 
 while :; do
