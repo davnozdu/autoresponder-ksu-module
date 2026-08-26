@@ -97,6 +97,9 @@ assert_all() {
   cmd appops set "$PKG" RUN_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" AUTO_START allow 2>/dev/null
+  # Доступ ко всем файлам (/sdcard/AutoResponder: about.md, бэкапы БД)
+  appops set --uid "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
+  cmd appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
 
   # Проверка обновления приложения (self-throttle 24ч)
   ( sh "$MODDIR/app-update.sh" ) 2>/dev/null &
