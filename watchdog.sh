@@ -7,7 +7,7 @@ NLS="$PKG/$PKG.notif.NotifListenerService"
 ROLE=android.app.role.CALL_SCREENING
 APK="$MODDIR/AutoResponder.apk"
 LOG="$MODDIR/watchdog.log"
-INTERVAL=300   # период перепроверки, сек
+INTERVAL=900   # период перепроверки, сек (экономия батареи)
 
 log() { echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
 trim() { tail -n 400 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
