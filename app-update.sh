@@ -44,7 +44,6 @@ curl -sL --max-time 120 -o /data/local/tmp/ar_upd.apk "$url" || { log "download 
 out=$(pm install -r -d /data/local/tmp/ar_upd.apk 2>&1)
 if echo "$out" | grep -qi Success; then
   cp /data/local/tmp/ar_upd.apk "$MODDIR/AutoResponder.apk"
-  echo "$tag" | tr -dc '0-9' > "$MODDIR/apk.versionCode"
   log "installed $tag"
 else
   log "install failed: $out"
