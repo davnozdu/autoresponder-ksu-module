@@ -24,15 +24,24 @@ jobs:
         id: ver
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.event.inputs.version }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
           fi
+          # versionCode = major*10000 + minor*100 + patch. Раньше здесь было `tr -dc '0-9'`,
+          # из-за чего v0.1.2 давал "012": невалидный JSON (ведущий ноль) — менеджер модулей
+          # не мог разобрать update.json и self-update молча не работал.
+          V="${TAG#v}"
+          MAJ=$(echo "$V" | cut -d. -f1); MIN=$(echo "$V" | cut -d. -f2); PAT=$(echo "$V" | cut -d. -f3)
+          CODE=$(( 10#${MAJ:-0} * 10000 + 10#${MIN:-0} * 100 + 10#${PAT:-0} ))
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "$TAG -> versionCode $CODE"
 
       - name: Sync module.prop version
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          CODE=$(echo "$TAG" | tr -dc '0-9')
+          CODE="${{ steps.ver.outputs.code }}"
           sed -i "s/^version=.*/version=$TAG/" module.prop
           sed -i "s/^versionCode=.*/versionCode=$CODE/" module.prop
           cat module.prop
@@ -57,7 +66,7 @@ jobs:
       - name: Bump update.json
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          CODE=$(echo "$TAG" | tr -dc '0-9')
+          CODE="${{ steps.ver.outputs.code }}"
           printf '%s\n'             '{'             "  \"version\": \"$TAG\","             "  \"versionCode\": $CODE,"             "  \"zipUrl\": \"https://github.com/davnozdu/autoresponder-ksu-module/releases/download/$TAG/autoresponder-ksu-module.zip\","             "  \"changelog\": \"https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/CHANGELOG.md\""             '}' > update.json
           cat update.json
 

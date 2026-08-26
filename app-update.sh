@@ -23,10 +23,19 @@ url=$(echo "$json" | grep -o '"browser_download_url"[^,]*\.apk"' | head -1 | sed
 [ -z "$tag" ] && exit 0
 echo "$now" > "$STAMP"
 
-# новее?
-top=$(printf '%s\n%s\n' "$tag" "$inst" | sort -V 2>/dev/null | tail -1)
-if [ "$tag" = "$inst" ] || [ "$top" != "$tag" ]; then
-  log "up-to-date (inst=$inst, latest=$tag)"; exit 0
+# Сравнение версий без `sort -V`: в toybox/busybox на телефоне его может не быть, и раньше
+# пустой результат означал «up-to-date» — обновление молча не ставилось никогда.
+# major.minor.patch -> одно число (major*10000 + minor*100 + patch).
+num() { n=$(echo "$1" | tr -cd '0-9' | sed 's/^0*//'); echo "${n:-0}"; }
+vcode() {
+  v=$(echo "$1" | sed 's/^[vV]//')
+  echo $(( $(num "$(echo "$v" | cut -d. -f1)") * 10000 \
+         + $(num "$(echo "$v" | cut -d. -f2)") * 100 \
+         + $(num "$(echo "$v" | cut -d. -f3)") ))
+}
+new_code=$(vcode "$tag"); cur_code=$(vcode "$inst")
+if [ "$new_code" -le "$cur_code" ]; then
+  log "up-to-date (inst=$inst/$cur_code, latest=$tag/$new_code)"; exit 0
 fi
 [ -z "$url" ] && { log "no apk asset"; exit 0; }
 

@@ -12,7 +12,10 @@ dl() { # dl <url> <out>
   else return 1; fi
 }
 
-cur=$(grep '^versionCode=' "$MODDIR/module.prop" | cut -d= -f2)
+# Ведущие нули убираем: старые сборки писали versionCode=012, и арифметика/сравнение
+# такого значения зависят от оболочки.
+cur=$(grep '^versionCode=' "$MODDIR/module.prop" | cut -d= -f2 | tr -cd '0-9' | sed 's/^0*//')
+cur=${cur:-0}
 mkdir -p "$TMP"
 dl "$UPDATE_JSON_URL" "$TMP/update.json" || { echo "update: no network"; exit 0; }
 
