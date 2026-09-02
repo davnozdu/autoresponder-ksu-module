@@ -8,8 +8,18 @@ ROLE=android.app.role.CALL_SCREENING
 APK="$MODDIR/AutoResponder.apk"
 LOG="$MODDIR/watchdog.log"
 INTERVAL=900   # период перепроверки, сек (экономия батареи)
+HB=/data/data/$PKG/files/heartbeat   # приложение трогает его раз в 10 минут
+HB_STALE=1800  # старше получаса — приложение молчит, хотя должно работать
+NOTIFY=1       # уведомлять владельца о починках (0 — только лог)
 
 log() { echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
+# Сообщение владельцу телефона. Раньше всё, что чинил watchdog, уходило только в
+# watchdog.log — то есть не узнавал никто, а «у меня опять отобрали роль» это
+# ровно тот факт, который нужно видеть сразу.
+notify() {
+  [ "$NOTIFY" = "0" ] && return 0
+  cmd notification post -S bigtext -t "Автоответчик: модуль" "autoresp_wd" "$1" >/dev/null 2>&1
+}
 trim() { tail -n 400 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
 
 app_installed() { pm path "$PKG" >/dev/null 2>&1; }
@@ -35,8 +45,16 @@ assert_all() {
   if ! app_installed; then
     if [ -f "$APK" ]; then
       out=$(pm install -r -g "$APK" 2>&1)
-      echo "$out" | grep -qi Success && { log "recover: apk reinstalled"; changed=1; } \
-        || log "recover: apk install failed: $out"
+      if echo "$out" | grep -qi Success; then
+        log "recover: apk reinstalled"; changed=1
+        # Приложение поставилось заново — история и настройки пусты. Если у модуля
+        # есть копия, вернуть её сейчас: позже приложение создаст свою базу, и
+        # восстанавливать станет некуда.
+        sh "$MODDIR/data-backup.sh" restore 2>/dev/null
+        notify "Приложение переустановлено, данные восстановлены из копии модуля."
+      else
+        log "recover: apk install failed: $out"
+      fi
     fi
   fi
   app_installed || return 0
@@ -46,7 +64,12 @@ assert_all() {
   case "$holder" in
     *"$PKG"*) : ;;
     *) if ! svc_fail "$holder"; then
-         cmd role add-role-holder $ROLE "$PKG" 2>/dev/null && { log "recover: role re-added"; changed=1; }
+         cmd role add-role-holder $ROLE "$PKG" 2>/dev/null && {
+           log "recover: role re-added"; changed=1
+           # Роль отбирает система или другой диалер — это надо знать, а не
+           # обнаруживать по тому, что звонки перестали отклоняться.
+           notify "Роль «screening звонков» была отобрана — вернул. Если повторяется, проверьте диалер по умолчанию."
+         }
        fi ;;
   esac
 
@@ -100,6 +123,26 @@ assert_all() {
   # Доступ ко всем файлам (/sdcard/AutoResponder: about.md, бэкапы БД)
   appops set --uid "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
   cmd appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
+
+  # 7) Живо ли приложение на самом деле.
+  # Прав и ролей может быть достаточно, а процесс при этом убит менеджером питания:
+  # снаружи всё «настроено», а звонки и сообщения не обрабатываются, и узнаётся это
+  # по жалобе клиента. Приложение раз в 10 минут трогает файл heartbeat; если он
+  # устарел — пере-привязываем listener, система поднимает процесс заново.
+  if [ -f "$HB" ]; then
+    now=$(date +%s)
+    hb=$(stat -c %Y "$HB" 2>/dev/null || echo 0)
+    age=$((now - hb))
+    if [ "$age" -gt "$HB_STALE" ]; then
+      cmd notification disallow_listener "$NLS" >/dev/null 2>&1
+      cmd notification allow_listener "$NLS" >/dev/null 2>&1
+      log "recover: app silent for ${age}s -> listener rebind"; changed=1
+      notify "Приложение молчало $((age / 60)) мин — перезапустил. Проверьте, не ограничивает ли его менеджер питания."
+    fi
+  fi
+
+  # 8) Копия данных приложения под root (self-throttle 24ч)
+  ( sh "$MODDIR/data-backup.sh" ) 2>/dev/null &
 
   # Проверка обновления приложения (self-throttle 24ч)
   ( sh "$MODDIR/app-update.sh" ) 2>/dev/null &
