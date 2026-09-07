@@ -18,5 +18,15 @@ until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
   done
 ) &
 
+# Root-мост к базам мессенджеров — тоже под супервизором: без него приложение
+# видит переписку только через уведомления и теряет контекст (см. bridge.sh).
+(
+  while :; do
+    setsid sh "$MODDIR/bridge.sh"
+    log "bridge exited, restart in 60s"
+    sleep 60
+  done
+) &
+
 # Self-update модуля в фоне
 ( sh "$MODDIR/update-check.sh" >> "$LOG" 2>&1 ) &

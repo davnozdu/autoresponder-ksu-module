@@ -3,3 +3,7 @@ provision.log
 apk.versionCode
 autoresponder-ksu-module.zip
 .DS_Store
+
+# рабочие файлы моста к базам мессенджеров
+bridge.log
+.bridge-stamp
