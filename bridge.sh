@@ -35,9 +35,14 @@ MIN_GAP=60
 FORCE_EVERY=1800
 
 # Базы: <метка> <путь>. Метка = имя подпапки в bridge/ и канал в журнале.
+#
+# Google Messages (метка rcs) здесь не ради переписки, а ради ОДНОГО поля: номера
+# отправителя. По RCS клиент приходит под именем и аватаром своего профиля, и в
+# уведомлении номера нет вообще — приложение такие сообщения молча пропускало.
 DBS="whatsapp:/data/data/com.whatsapp.w4b/databases/msgstore.db
 whatsapp2:/data/data/com.whatsapp/databases/msgstore.db
-telegram:/data/data/org.telegram.messenger/files/cache4.db"
+telegram:/data/data/org.telegram.messenger/files/cache4.db
+rcs:/data/data/com.google.android.apps.messaging/databases/bugle_db"
 
 log() { echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
 trim() { tail -n 300 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
