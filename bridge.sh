@@ -80,10 +80,16 @@ copy_db() {
   mkdir -p "$dst" || return 1
   base=$(basename "$src")
   rm -f "$dst/$base-shm" 2>/dev/null
+  # Старый WAL относится к предыдущему снимку. Если источник уже сделал
+  # checkpoint и собственного WAL больше нет, оставшийся файл нельзя оставлять:
+  # SQLite применит его к новой базе и вернёт старые страницы.
+  has_wal=0
+  [ -f "$src-wal" ] && has_wal=1
   for ext in "" "-wal"; do
     [ -f "$src$ext" ] || continue
     cp -f "$src$ext" "$dst/$base$ext" 2>/dev/null || return 1
   done
+  [ "$has_wal" = "1" ] || rm -f "$dst/$base-wal" 2>/dev/null
   chown -R "$uid:$uid" "$dst" 2>/dev/null
   chmod -R 600 "$dst"/* 2>/dev/null
   chmod 700 "$dst" 2>/dev/null

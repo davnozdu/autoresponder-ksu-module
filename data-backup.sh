@@ -47,11 +47,31 @@ restore)
   # Копию делаем через sqlite3, если он есть: простой cp во время записи даёт
   # обрезанный файл, а WAL остаётся в стороне и часть истории теряется.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$DATA/databases/history.db" ".backup '$DST/history.db.tmp'" 2>/dev/null \
-      && mv -f "$DST/history.db.tmp" "$DST/history.db" \
-      || cp -f "$DATA/databases/history.db" "$DST/history.db" 2>/dev/null
+    if ! sqlite3 "$DATA/databases/history.db" ".backup '$DST/history.db.tmp'" 2>/dev/null \
+      || ! mv -f "$DST/history.db.tmp" "$DST/history.db"; then
+      rm -f "$DST/history.db.tmp" 2>/dev/null
+      log "backup skipped: sqlite3 snapshot failed"
+      exit 0
+    fi
   else
-    cp -f "$DATA/databases/history.db" "$DST/history.db" 2>/dev/null
+    # Обычный cp живой SQLite может сохранить смесь старых и новых страниц.
+    # Если приложение уже сделало собственную согласованную копию на общем
+    # хранилище, берём только файл старше минуты; иначе оставляем последнюю
+    # корректную root-копию и ждём следующего цикла.
+    latest=$(ls -1t /sdcard/AutoResponder/backups/history-*.db 2>/dev/null | head -1)
+    if [ -n "$latest" ] && [ -f "$latest" ]; then
+      age=$((now - $(stat -c %Y "$latest" 2>/dev/null || echo 0)))
+      if [ "$age" -ge 60 ]; then
+        cp -f "$latest" "$DST/history.db" 2>/dev/null || exit 0
+        log "backup ok (copied stable app snapshot, sqlite3 unavailable)"
+      else
+        log "backup skipped: newest app snapshot is still being written"
+        exit 0
+      fi
+    else
+      log "backup skipped: sqlite3 unavailable and no app snapshot"
+      exit 0
+    fi
   fi
   for f in "$DATA"/shared_prefs/*.xml; do
     [ -f "$f" ] || continue
