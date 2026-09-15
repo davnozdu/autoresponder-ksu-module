@@ -108,8 +108,21 @@ is_tmpfs() {
     /proc/self/mountinfo 2>/dev/null
 }
 
+# Годен ли уже смонтированный tmpfs. Мало того, что он tmpfs: корень должен принадлежать
+# приложению. После переустановки приложения uid другой, и чужой корень надо перемонтировать.
+ram_ok() {
+  is_tmpfs "$DIR" || return 1
+  [ "$(stat -c %u "$DIR" 2>/dev/null)" = "$(app_uid)" ]
+}
+
 ensure_ram() {
-  is_tmpfs "$DIR" && return 0
+  ram_ok && return 0
+  uid=$(app_uid)
+  [ -n "$uid" ] || return 1
+  if is_tmpfs "$DIR"; then
+    umount "$DIR" 2>/dev/null
+    log "копии в ОЗУ перемонтируются: у приложения сменился uid"
+  fi
   mkdir -p "$DIR" 2>/dev/null || return 1
   # Копии от прошлых версий модуля лежат на флеше. Стереть их надо ДО монтирования:
   # после него старые файлы останутся под маунтом, невидимые и занятые навсегда.
@@ -117,7 +130,12 @@ ensure_ram() {
     _t=${_e%%:*}
     [ -d "$DIR/$_t" ] && { rm -rf "$DIR/$_t" 2>/dev/null; log "старая копия $_t убрана с диска"; }
   done
-  if mount -t tmpfs -o "size=$RAM_SIZE,mode=700" autoresp_bridge "$DIR" 2>/dev/null; then
+  # uid/gid прямо в опциях монтирования, а не chown следом. Свежий tmpfs монтируется
+  # корнем root:root с правами 700, и приложение в эту долю секунды не может даже войти
+  # в собственную папку: 15.09 в 12:53:12 оно ровно так и получило EACCES на request,
+  # а проход моста пропустило. Права из опций действуют с первого мгновения.
+  if mount -t tmpfs -o "size=$RAM_SIZE,mode=700,uid=$uid,gid=$uid" autoresp_bridge "$DIR" 2>/dev/null; then
+    relabel "$DIR"
     log "копии переведены в ОЗУ (tmpfs $RAM_SIZE)"
     return 0
   fi
