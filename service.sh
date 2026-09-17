@@ -6,6 +6,7 @@ LOG="$MODDIR/provision.log"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
 until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+rmdir "$MODDIR/.module-update-lock" "$MODDIR/.app-update-lock" 2>/dev/null
 : > "$LOG"; log "boot completed, launching watchdog"
 
 # Супервизор: держит watchdog живым. Если процесс убьют — перезапуск через 60с.

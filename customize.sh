@@ -15,4 +15,10 @@ else
   ui_print "! Module will still provision permissions once the app is present."
 fi
 
+# Keep root recovery snapshots when the manager replaces the module directory.
+OLD=/data/adb/modules/autoresp_ksu
+if [ -d "$OLD/backup" ] && [ "$OLD" != "$MODPATH" ]; then
+  cp -a "$OLD/backup" "$MODPATH/backup"
+  [ -f "$OLD/.data_bk_stamp" ] && cp "$OLD/.data_bk_stamp" "$MODPATH/.data_bk_stamp"
+fi
 ui_print "- Done. Reboot to apply."

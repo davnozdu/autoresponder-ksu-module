@@ -63,6 +63,18 @@ jobs:
           zip -r autoresponder-ksu-module.zip . -x '.git/*' -x '.github/*' -x '*.md' -x 'provision.log'
           unzip -l autoresponder-ksu-module.zip
 
+      - name: Sign module ZIP
+        env:
+          MODULE_UPDATE_KEY: ${{ secrets.MODULE_UPDATE_KEY }}
+        run: |
+          test -n "$MODULE_UPDATE_KEY"
+          printf '%s\n' "$MODULE_UPDATE_KEY" > "$RUNNER_TEMP/update-private.pem"
+          chmod 600 "$RUNNER_TEMP/update-private.pem"
+          openssl dgst -sha256 -sign "$RUNNER_TEMP/update-private.pem" -out autoresponder-ksu-module.zip.sig autoresponder-ksu-module.zip
+          openssl pkey -pubin -inform DER -in update-public.der -out "$RUNNER_TEMP/update-public.pem"
+          openssl dgst -sha256 -verify "$RUNNER_TEMP/update-public.pem" -signature autoresponder-ksu-module.zip.sig autoresponder-ksu-module.zip
+          rm -f "$RUNNER_TEMP/update-private.pem"
+
       - name: Bump update.json
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
@@ -86,5 +98,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          files: autoresponder-ksu-module.zip
+          files: |
+            autoresponder-ksu-module.zip
+            autoresponder-ksu-module.zip.sig
           generate_release_notes: true

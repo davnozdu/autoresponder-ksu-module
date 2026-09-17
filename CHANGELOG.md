@@ -1,3 +1,10 @@
+## v0.2.0
+- Signed module updates with pinned RSA public key; retry on network failures.
+- Validate APK package, version and signer before root installation; retain previous APK.
+- Validate root snapshots using Android SQLite; no sqlite3 CLI dependency.
+- Preserve root backups across module updates and expose health to APK 0.15.0+.
+- Messenger copies remain in tmpfs; bridge implementation unchanged.
+
 # Changelog
 
 ## v0.1.14

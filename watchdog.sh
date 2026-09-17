@@ -50,8 +50,11 @@ assert_all() {
         # Приложение поставилось заново — история и настройки пусты. Если у модуля
         # есть копия, вернуть её сейчас: позже приложение создаст свою базу, и
         # восстанавливать станет некуда.
-        sh "$MODDIR/data-backup.sh" restore 2>/dev/null
-        notify "Приложение переустановлено, данные восстановлены из копии модуля."
+        if sh "$MODDIR/data-backup.sh" restore 2>/dev/null; then
+          notify "Приложение переустановлено. Проверка восстановления завершена; проверьте историю и настройки."
+        else
+          notify "Приложение переустановлено, но восстановление данных не удалось."
+        fi
       else
         log "recover: apk install failed: $out"
       fi
@@ -146,6 +149,21 @@ assert_all() {
 
   # Проверка обновления приложения (self-throttle 24ч)
   ( sh "$MODDIR/app-update.sh" ) 2>/dev/null &
+
+  ( sh "$MODDIR/update-check.sh" >> "$LOG" 2>&1 ) &
+  # Publish non-sensitive module health for the APK's diagnostics page.
+  health=/data/data/$PKG/files/module-health
+  {
+    echo "Модуль: $(sed -n 's/^version=//p' "$MODDIR/module.prop")"
+    cat "$MODDIR/update-status" 2>/dev/null
+    df -h /data/data/$PKG/files/bridge 2>/dev/null | tail -1
+  } > "$health.tmp"
+  uid=$(stat -c %u /data/data/$PKG/files 2>/dev/null)
+  ctx=$(ls -dZ /data/data/$PKG/files 2>/dev/null | awk '{print $1}')
+  chown "$uid:$uid" "$health.tmp" 2>/dev/null
+  chmod 600 "$health.tmp" 2>/dev/null
+  chcon "$ctx" "$health.tmp" 2>/dev/null
+  mv -f "$health.tmp" "$health" 2>/dev/null
 
   [ "$changed" = "1" ] && log "state changed -> re-asserted"
   return 0
