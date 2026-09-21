@@ -1,3 +1,6 @@
+## v0.2.2
+- app-update.sh: retry an hour after a failed check or install instead of on every watchdog tick.
+
 ## v0.2.1
 - Use portable grep expressions for Android Toybox: correctly parse update versionCode and detect unavailable system services.
 

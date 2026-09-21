@@ -2,17 +2,21 @@
 # app-update.sh — раз в сутки проверяет релиз приложения на GitHub и ставит новее под root.
 MODDIR=${0%/*}
 PKG=com.davnozdu.autoresponder
-STAMP=$MODDIR/.app_upd_stamp
+NEXT=$MODDIR/.app_upd_next
 LOG=$MODDIR/provision.log
 LOCK=$MODDIR/.app-update-lock
 mkdir "$LOCK" 2>/dev/null || exit 0
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 log() { echo "$(date '+%m-%d %H:%M:%S') app-update: $*" >> "$LOG"; }
 
-# throttle 24ч
+# Расписание попыток, как в update-check.sh: сутки после ясного результата, час после сбоя.
+# Watchdog зовёт нас каждые INTERVAL (900с), и раньше любой отказ — непройденная проверка
+# подписанта, неудачный pm install — оставался без отметки: APK тянулся заново каждые 15 минут.
 now=$(date +%s)
-last=$(cat "$STAMP" 2>/dev/null || echo 0)
-[ $((now - last)) -lt 86400 ] && exit 0
+next=$(cat "$NEXT" 2>/dev/null)
+case "$next" in ''|*[!0-9]*) next=0 ;; esac
+[ "$now" -lt "$next" ] && exit 0
+echo $((now + 3600)) > "$NEXT"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 have curl || exit 0
@@ -38,7 +42,7 @@ vcode() {
 }
 new_code=$(vcode "$tag"); cur_code=$(vcode "$inst")
 if [ "$new_code" -le "$cur_code" ]; then
-  echo "$now" > "$STAMP"; log "up-to-date (inst=$inst/$cur_code, latest=$tag/$new_code)"; exit 0
+  echo $((now + 86400)) > "$NEXT"; log "up-to-date (inst=$inst/$cur_code, latest=$tag/$new_code)"; exit 0
 fi
 [ -z "$url" ] && { log "no apk asset"; exit 0; }
 
@@ -54,7 +58,7 @@ cp "$installed_apk" "$MODDIR/previous.apk" || exit 0
 out=$(pm install -r /data/local/tmp/ar_upd.apk 2>&1)
 if echo "$out" | grep -qi Success; then
   cp /data/local/tmp/ar_upd.apk "$MODDIR/AutoResponder.apk"
-  echo "$now" > "$STAMP"
+  echo $((now + 86400)) > "$NEXT"
   log "installed verified $tag"
 else
   log "install failed: $out"
