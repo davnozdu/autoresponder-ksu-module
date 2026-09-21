@@ -23,7 +23,7 @@ notify() {
 trim() { tail -n 400 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
 
 app_installed() { pm path "$PKG" >/dev/null 2>&1; }
-svc_fail() { echo "$1" | grep -qi 'Failure\|Exception'; }
+svc_fail() { echo "$1" | grep -qiE 'Failure|Exception'; }
 
 # Ждём готовности PackageManager и RoleManager (иначе Failed transaction)
 wait_ready() {

@@ -1,3 +1,6 @@
+## v0.2.1
+- Use portable grep expressions for Android Toybox: correctly parse update versionCode and detect unavailable system services.
+
 ## v0.2.0
 - Signed module updates with pinned RSA public key; retry on network failures.
 - Validate APK package, version and signer before root installation; retain previous APK.

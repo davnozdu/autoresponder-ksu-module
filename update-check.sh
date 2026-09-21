@@ -17,7 +17,7 @@ dl() { curl -fLsS --proto '=https' --max-time 120 -o "$2" "$1"; }
 URL=https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/update.json
 dl "$URL" "$TMP/update.json" || { status "Нет сети; повтор через час"; exit 0; }
 cur=$(sed -n 's/^versionCode=//p' "$MODDIR/module.prop")
-new=$(grep -o '"versionCode"[^,]*' "$TMP/update.json" | grep -o '[0-9]\+' | head -1)
+new=$(grep -o '"versionCode"[^,]*' "$TMP/update.json" | grep -o '[0-9][0-9]*' | head -1)
 url=$(grep -o '"zipUrl"[^,]*' "$TMP/update.json" | sed 's/.*"zipUrl"[^"]*"//; s/".*//')
 case "$new" in ''|*[!0-9]*) status "Неверный манифест"; exit 0 ;; esac
 if [ "$new" -le "$cur" ]; then
