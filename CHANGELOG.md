@@ -1,3 +1,6 @@
+## v0.2.3
+- Grant SYSTEM_ALERT_WINDOW so the app can draw the caller card over the dialer.
+
 ## v0.2.2
 - app-update.sh: retry an hour after a failed check or install instead of on every watchdog tick.
 

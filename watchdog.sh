@@ -123,6 +123,10 @@ assert_all() {
   cmd appops set "$PKG" RUN_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" RUN_ANY_IN_BACKGROUND allow 2>/dev/null
   cmd appops set "$PKG" AUTO_START allow 2>/dev/null
+  # Окно поверх звонилки: карточка звонящего. Разрешение уровня appop, обычным
+  # pm grant не выдаётся. Переприменяем вместе с остальными — на телефоне в выдаче
+  # когда-то отказали вручную, и отметка отказа осталась.
+  cmd appops set "$PKG" SYSTEM_ALERT_WINDOW allow 2>/dev/null
   # Доступ ко всем файлам (/sdcard/AutoResponder: about.md, бэкапы БД)
   appops set --uid "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
   cmd appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null
