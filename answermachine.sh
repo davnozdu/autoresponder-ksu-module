@@ -16,12 +16,19 @@
 # Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
 #
 # pal_inject требует разрешения SELinux на путь к PAL-сервису; правила — в sepolicy.rule.
-# Пока они не настроены (enforcing), проигрывание не пройдёт — это ожидаемо, тюнинг
-# делается на устройстве (permissive+audit). Демон при этом стабилен и не мешает системе.
+#
+# ВАЖНО про расположение бинаря: запуск НАПРЯМУЮ из папки модуля (/data/adb/modules/...,
+# файлы там помечены KernelSU как system_file) НЕ РАБОТАЕТ — линкер отказывается открыть
+# /vendor/lib64/libpalclient.so: "not accessible for the namespace (default)". Дело не в
+# SELinux-метке файла (chcon не помогает) и не в правах — linkerconfig выбирает пространство
+# имён по ПУТИ, и /data/local/tmp/ — единственное проверенное место, где выдаётся namespace
+# с доступом к /vendor/lib64 (исторически — для adb/shell отладочных бинарей). Поэтому при
+# каждом старте копируем бинарь из модуля в /data/local/tmp и выполняем именно оттуда.
 
 MODDIR=${0%/*}
 PKG=com.davnozdu.autoresponder
-BIN=$MODDIR/bin/pal_inject
+SRC=$MODDIR/bin/pal_inject
+BIN=/data/local/tmp/.autoresp_pal_inject
 DIR=/data/data/$PKG/files/am
 REQ=$DIR/req
 RESP=$DIR/resp
@@ -52,7 +59,7 @@ play() { # <wav> <loops>
   wav=$1; loops=${2:-3}
   case "$loops" in ''|*[!0-9]*) loops=3 ;; esac
   [ -f "$wav" ] || { log "play: нет файла $wav"; reply err nofile; return; }
-  [ -x "$BIN" ] || { chmod 755 "$BIN" 2>/dev/null; [ -x "$BIN" ] || { reply err nobin; return; }; }
+  [ -x "$BIN" ] || { stage_bin || { reply err nobin; return; }; }
   stop_play
   # devid=0: устройство PAL берёт из активной голосовой сессии.
   "$BIN" "$wav" "$loops" 0 >> "$LOG" 2>&1 &
@@ -84,6 +91,19 @@ handle() {
   esac
 }
 
+# Копирует бинарь из модуля в /data/local/tmp (см. комментарий выше про linkerconfig).
+# Перекопируем, если ещё не сделано или source изменился (обновление модуля) — сверяем
+# размер, дешёво и достаточно для целостности при апдейте.
+stage_bin() {
+  [ -f "$SRC" ] || return 1
+  if [ ! -x "$BIN" ] || [ "$(stat -c %s "$SRC" 2>/dev/null)" != "$(stat -c %s "$BIN" 2>/dev/null)" ]; then
+    cp -f "$SRC" "$BIN" 2>/dev/null || return 1
+    chmod 755 "$BIN" 2>/dev/null
+    chcon u:object_r:shell_data_file:s0 "$BIN" 2>/dev/null
+  fi
+  [ -x "$BIN" ]
+}
+
 prepare() {
   uid=$(app_uid); [ -n "$uid" ] || return 1
   mkdir -p "$DIR" 2>/dev/null || return 1
@@ -91,7 +111,7 @@ prepare() {
   [ -f "$REQ" ] || : > "$REQ"
   chown "$uid:$uid" "$REQ" 2>/dev/null; chmod 600 "$REQ" 2>/dev/null
   ctx=$(app_ctx); [ -n "$ctx" ] && chcon -R "$ctx" "$DIR" 2>/dev/null
-  chmod 755 "$BIN" 2>/dev/null
+  stage_bin
   return 0
 }
 
