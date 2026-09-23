@@ -182,6 +182,7 @@ blockoff() {
 handle() {
   line=$(head -n1 "$REQ" 2>/dev/null) || return
   [ -n "$line" ] || return
+  log "recv: $line"
   # shellcheck disable=SC2086
   set -- $line
   cmd=$1; shift
