@@ -221,13 +221,27 @@ prepare() {
   return 0
 }
 
+FIFO="$MODDIR/.req_fifo"
+
 : > "$LOG"; log "answermachine start (pid $$)"
 # inotifyd будит демон на каждую запись req — без опроса, без расхода батареи.
 # Если inode req пересоздан (переустановка приложения), inotifyd выходит — заводим заново.
+#
+# ВАЖНО: читаем события через именованный FIFO с `<`, а не через pipe `|`. В POSIX-шеллах
+# (в т.ч. toybox sh на Android) правая часть `|` выполняется в ПОДШЕЛЛЕ. handle() (через
+# blockon) спавнит фоновый job (`nohup sh watchdog_block.sh ... &`) — запуск фонового job'а
+# из такого подшелла ломает дальнейшее чтение этого же pipe: последующие команды (play,
+# muteout, повторные redim) молча теряются на десятки секунд. Redirect `< "$FIFO"` НЕ создаёт
+# подшелл для тела цикла — читает в основном процессе демона, — поэтому фоновые job'ы внутри
+# handle() больше не мешают чтению следующих строк.
 while :; do
   if ! prepare; then sleep 5; continue; fi
-  inotifyd - "$REQ:cew" 2>/dev/null | while read -r _ev _rest; do
+  [ -p "$FIFO" ] || mkfifo "$FIFO" 2>/dev/null
+  inotifyd - "$REQ:cew" > "$FIFO" 2>/dev/null &
+  INOTPID=$!
+  while read -r _ev _rest; do
     handle
-  done
+  done < "$FIFO"
+  kill "$INOTPID" 2>/dev/null
   sleep 1
 done

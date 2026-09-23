@@ -1,3 +1,14 @@
+## v0.3.1
+- Fix `answermachine.sh` losing commands after `blockon`: the daemon read requests via
+  `inotifyd | while read`, and in POSIX shells the right side of a pipe runs in a subshell.
+  `blockon` spawns a detached watchdog (`nohup sh watchdog_block.sh ... &`), and doing that
+  from inside the piped subshell broke the pipe's ability to keep delivering read events —
+  subsequent `play`/`muteout`/`redim` requests silently vanished for tens of seconds (root
+  cause of a live call where screen/touch blocking worked but the greeting never played).
+  Fixed by reading from a named FIFO with `< "$FIFO"` instead of `|`: input redirection does
+  not create a subshell for the loop body, so background jobs spawned inside `handle()` no
+  longer disrupt subsequent reads.
+
 ## v0.3.0 — voice answering machine
 - Bundle native `bin/pal_inject` (aarch64): opens PAL_STREAM_VOICE_CALL_MUSIC to play a greeting
   into the live call uplink. Built from github.com/davnozdu/pal-inject (NDK, SM8850 PAL headers).
