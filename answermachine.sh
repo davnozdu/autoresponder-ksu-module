@@ -18,6 +18,14 @@
 #   blockon <app_pid>             железно: подсветка в 0 + тачскрин выключен на уровне ядра
 #   redim                         повторно погасить подсветку (см. комментарий у blockon)
 #   blockoff                      вернуть подсветку и тач как было
+#   recstart <wav_abspath> <max_sec>  своя запись звонка через `bin/pal_record` (incall-record
+#                                 тап, uplink+downlink) — на случай, если штатный рекордер
+#                                 OxygenOS не подхватится (видели ~1 звонок из 4 без файла
+#                                 вовсе). Пишем ПАРАЛЛЕЛЬНО штатному с самого начала звонка, не
+#                                 дожидаясь проверки — тап INCALL_RECORD рассчитан на несколько
+#                                 слушателей, конфликтовать физически нечему. Приложение само
+#                                 решает после звонка, какой из двух файлов оставить.
+#   recstop                       остановить свою запись, дождаться корректного WAV-заголовка
 # Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
 #
 # SELinux в enforcing НЕ мешает этому пути (проверено на устройстве): запись pal_stream_write
@@ -38,10 +46,14 @@ MODDIR=${0%/*}
 PKG=com.davnozdu.autoresponder
 SRC=$MODDIR/bin/pal_inject
 BIN=/data/local/tmp/.autoresp_pal_inject
+REC_SRC=$MODDIR/bin/pal_record
+REC_BIN=/data/local/tmp/.autoresp_pal_record
 DIR=/data/data/$PKG/files/am
 REQ=$DIR/req
 RESP=$DIR/resp
 PIDF=$DIR/.playpid
+RECPIDF=$DIR/.recpid
+RECSTOPF=$DIR/.recstop
 LOG="$MODDIR/answermachine.log"
 # Состояние железной блокировки экрана/тача — пути и сохранённая яркость между blockon/blockoff.
 ST="$MODDIR/.block"
@@ -179,6 +191,44 @@ blockoff() {
   reply ok unblocked
 }
 
+# Своя запись звонка — fallback, если штатный рекордер OxygenOS не подхватится (см. верх
+# файла). devid=0: устройство PAL берёт из активной голосовой сессии, как и play().
+stage_rec_bin() {
+  [ -f "$REC_SRC" ] || return 1
+  if [ ! -x "$REC_BIN" ] || [ "$(stat -c %s "$REC_SRC" 2>/dev/null)" != "$(stat -c %s "$REC_BIN" 2>/dev/null)" ]; then
+    cp -f "$REC_SRC" "$REC_BIN" 2>/dev/null || return 1
+    chmod 755 "$REC_BIN" 2>/dev/null
+    chcon u:object_r:shell_data_file:s0 "$REC_BIN" 2>/dev/null
+  fi
+  [ -x "$REC_BIN" ]
+}
+
+recstart() { # <wav_abspath> <max_sec>
+  out=$1; maxsec=${2:-300}
+  case "$maxsec" in ''|*[!0-9]*) maxsec=300 ;; esac
+  [ -n "$out" ] || { reply err nopath; return; }
+  [ -x "$REC_BIN" ] || { stage_rec_bin || { reply err nobin; return; }; }
+  mkdir -p "${out%/*}" 2>/dev/null
+  rm -f "$RECSTOPF"
+  "$REC_BIN" "$out" "$maxsec" "$RECSTOPF" 0 >> "$LOG" 2>&1 &
+  echo $! > "$RECPIDF"
+  log "recstart: $out max=${maxsec}s (pid $!)"
+  reply ok "recstart"
+}
+
+recstop() {
+  [ -f "$RECPIDF" ] || { reply ok "recstop:noop"; return; }
+  touch "$RECSTOPF" 2>/dev/null
+  pid=$(cat "$RECPIDF" 2>/dev/null)
+  # Не убиваем сигналом — pal_record должен сам дописать реальные размеры в WAV-заголовок
+  # (при старте они неизвестны), иначе файл останется нечитаемым (dataSize=0).
+  i=0
+  while [ -d "/proc/$pid" ] && [ "$i" -lt 15 ]; do sleep 1; i=$((i+1)); done
+  rm -f "$RECPIDF" "$RECSTOPF"
+  log "recstop: done"
+  reply ok "recstop"
+}
+
 handle() {
   line=$(head -n1 "$REQ" 2>/dev/null) || return
   [ -n "$line" ] || return
@@ -194,6 +244,8 @@ handle() {
     blockon)   blockon "$1" ;;
     redim)     redim ;;
     blockoff)  blockoff ;;
+    recstart)  recstart "$1" "$2" ;;
+    recstop)   recstop ;;
     *)       log "неизвестная команда: $cmd" ;;
   esac
 }
@@ -219,6 +271,7 @@ prepare() {
   chown "$uid:$uid" "$REQ" 2>/dev/null; chmod 600 "$REQ" 2>/dev/null
   ctx=$(app_ctx); [ -n "$ctx" ] && chcon -R "$ctx" "$DIR" 2>/dev/null
   stage_bin
+  stage_rec_bin
   return 0
 }
 

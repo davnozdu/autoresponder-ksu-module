@@ -24,6 +24,15 @@ else
   ui_print "! pal_inject helper missing — voice greeting will be unavailable"
 fi
 
+# Своя запись звонка (fallback на случай, если штатный рекордер OxygenOS не подхватится).
+PALREC="$MODPATH/bin/pal_record"
+if [ -f "$PALREC" ]; then
+  set_perm "$PALREC" 0 0 0755
+  ui_print "- Own call recording fallback (pal_record) installed"
+else
+  ui_print "! pal_record helper missing — no fallback call recording"
+fi
+
 # Keep root recovery snapshots when the manager replaces the module directory.
 OLD=/data/adb/modules/autoresp_ksu
 if [ -d "$OLD/backup" ] && [ "$OLD" != "$MODPATH" ]; then
