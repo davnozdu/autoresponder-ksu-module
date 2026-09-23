@@ -15,6 +15,9 @@
 #   muteout on|off                mixer-mute выходного RX-устройства (fallback; см. ниже)
 #   screenoff                     выключить экран, если сейчас включён (input keyevent 26) —
 #                                 обычному приложению недоступно, только через root
+#   blockon <app_pid>             железно: подсветка в 0 + тачскрин выключен на уровне ядра
+#   redim                         повторно погасить подсветку (см. комментарий у blockon)
+#   blockoff                      вернуть подсветку и тач как было
 # Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
 #
 # SELinux в enforcing НЕ мешает этому пути (проверено на устройстве): запись pal_stream_write
@@ -40,6 +43,9 @@ REQ=$DIR/req
 RESP=$DIR/resp
 PIDF=$DIR/.playpid
 LOG="$MODDIR/answermachine.log"
+# Состояние железной блокировки экрана/тача — пути и сохранённая яркость между blockon/blockoff.
+ST="$MODDIR/.block"
+STOPF="$ST/stop"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
 
@@ -92,6 +98,83 @@ screenoff() {
   *) log "screenoff: экран и так не Awake ($st), пропуск"; reply ok "already-off" ;; esac
 }
 
+# ── Железная блокировка экрана/тача ──────────────────────────────────────────────
+# Портировано из github.com/davnozdu/vr-usb-monitor (тот же телефон, там уже проверено).
+#
+# Тач — через inhibit-интерфейс input-подсистемы ядра: убирает события НА УРОВНЕ
+# ДРАЙВЕРА, поэтому даже системный экран разблокировки (Keyguard — он защищён от чужих
+# окон) перестаёт на них реагировать. Никакой борьбы за то, чьё окно поверх.
+# Подсветка — напрямую в /sys/class/backlight, а не через Android Settings: не зависит
+# от состояния «проснулся/уснул» и не задевает то, что при обычном гашении экрана во
+# время звонка меняет маршрут звука на динамик владельца (см. AnswerMachineService).
+
+find_touch_inhibit() {
+  for pat in touchpanel touchscreen touch_panel touch; do
+    np=$(grep -rl "$pat" /sys/class/input/*/name 2>/dev/null | head -1)
+    [ -n "$np" ] || continue
+    ih="${np%name}inhibited"
+    [ -f "$ih" ] && { echo "$ih"; return; }
+  done
+}
+
+find_backlight() { ls /sys/class/backlight/*/brightness 2>/dev/null | head -1; }
+
+blockon() { # <app_pid>
+  pid=$1
+  mkdir -p "$ST" 2>/dev/null
+  rm -f "$STOPF"
+  touchp=$(find_touch_inhibit); bl=$(find_backlight)
+  blval=-1; [ -n "$bl" ] && blval=$(cat "$bl" 2>/dev/null)
+  echo "$touchp" > "$ST/touch"; echo "$bl" > "$ST/bl"; echo "$blval" > "$ST/blval"
+
+  settings put system screen_off_timeout 2147483647 2>/dev/null
+  settings put system screen_brightness_mode 0 2>/dev/null
+  settings put system screen_brightness 0 2>/dev/null
+  [ -n "$bl" ] && echo 0 > "$bl" 2>/dev/null
+  [ -n "$touchp" ] && echo 1 > "$touchp" 2>/dev/null
+  log "blockon: touch=$touchp bl=$bl(was $blval) app_pid=$pid"
+
+  # Root-сторож: если приложение исчезнет (OOM/краш) без команды blockoff, телефон не
+  # должен остаться намертво чёрным и нетрогаемым. Следит за /proc/<pid> самого процесса,
+  # а не за пульсом от приложения — таймеры Doze может не пустить, /proc — нет.
+  (
+    while [ -d "/proc/$pid" ]; do
+      [ -f "$STOPF" ] && exit 0
+      grep -q "$PKG" "/proc/$pid/cmdline" 2>/dev/null || break
+      sleep 2
+    done
+    [ -f "$STOPF" ] && exit 0
+    t=$(cat "$ST/touch" 2>/dev/null); b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
+    [ -n "$t" ] && echo 0 > "$t" 2>/dev/null
+    if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
+    settings put system screen_brightness_mode 1 2>/dev/null
+    settings put system screen_off_timeout 30000 2>/dev/null
+    log "blockon-сторож: приложение (pid $pid) исчезло — откатил сам"
+  ) &
+  reply ok "blocked touch=$touchp bl=$bl"
+}
+
+# DisplayManager перебивает первую запись в подсветку через пару секунд (проверено в
+# vr-usb-monitor) — приложение шлёт эту команду на каждом тике своего цикла, пока
+# блокировка активна.
+redim() {
+  [ -f "$ST/bl" ] || return
+  bl=$(cat "$ST/bl" 2>/dev/null)
+  [ -n "$bl" ] && echo 0 > "$bl" 2>/dev/null
+  reply ok redimmed
+}
+
+blockoff() {
+  touch "$STOPF" 2>/dev/null   # сторож увидит и выйдет сам, не восстанавливая повторно
+  t=$(cat "$ST/touch" 2>/dev/null); b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
+  [ -n "$t" ] && echo 0 > "$t" 2>/dev/null
+  if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
+  settings put system screen_brightness_mode 1 2>/dev/null
+  settings put system screen_off_timeout 30000 2>/dev/null
+  log "blockoff: восстановлено"
+  reply ok unblocked
+}
+
 handle() {
   line=$(head -n1 "$REQ" 2>/dev/null) || return
   [ -n "$line" ] || return
@@ -103,6 +186,9 @@ handle() {
     stop)      stop_play; reply ok stopped ;;
     muteout)   muteout "$1" ;;
     screenoff) screenoff ;;
+    blockon)   blockon "$1" ;;
+    redim)     redim ;;
+    blockoff)  blockoff ;;
     *)       log "неизвестная команда: $cmd" ;;
   esac
 }
