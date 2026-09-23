@@ -125,14 +125,26 @@ blockon() { # <app_pid>
   rm -f "$STOPF"
   touchp=$(find_touch_inhibit); bl=$(find_backlight)
   blval=-1; [ -n "$bl" ] && blval=$(cat "$bl" 2>/dev/null)
+
+  # На этом телефоне тот же узел inhibited держит модуль vr_display_mode/VR Monitor
+  # (для VR-гарнитуры). Если тач УЖЕ инхибирован кем-то до нас — это не наша блокировка:
+  # не трогаем узел ни сейчас, ни при откате, иначе наш blockoff снял бы чужую блокировку
+  # (например, сорвал бы активный VR-сеанс, когда наш звонок просто закончился раньше).
+  touch_was=0
+  [ -n "$touchp" ] && touch_was=$(cat "$touchp" 2>/dev/null)
   echo "$touchp" > "$ST/touch"; echo "$bl" > "$ST/bl"; echo "$blval" > "$ST/blval"
+  echo "$touch_was" > "$ST/touch_was"
 
   settings put system screen_off_timeout 2147483647 2>/dev/null
   settings put system screen_brightness_mode 0 2>/dev/null
   settings put system screen_brightness 0 2>/dev/null
   [ -n "$bl" ] && echo 0 > "$bl" 2>/dev/null
-  [ -n "$touchp" ] && echo 1 > "$touchp" 2>/dev/null
-  log "blockon: touch=$touchp bl=$bl(was $blval) app_pid=$pid"
+  if [ -n "$touchp" ] && [ "$touch_was" != "1" ]; then
+    echo 1 > "$touchp" 2>/dev/null
+  elif [ "$touch_was" = "1" ]; then
+    log "blockon: тач уже инхибирован кем-то другим (VR Monitor?) — не трогаем узел"
+  fi
+  log "blockon: touch=$touchp(was $touch_was) bl=$bl(was $blval) app_pid=$pid"
 
   # Root-сторож: если приложение исчезнет (OOM/краш) без команды blockoff, телефон не
   # должен остаться намертво чёрным и нетрогаемым. Следит за /proc/<pid> самого процесса,
@@ -144,8 +156,9 @@ blockon() { # <app_pid>
       sleep 2
     done
     [ -f "$STOPF" ] && exit 0
-    t=$(cat "$ST/touch" 2>/dev/null); b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
-    [ -n "$t" ] && echo 0 > "$t" 2>/dev/null
+    t=$(cat "$ST/touch" 2>/dev/null); tw=$(cat "$ST/touch_was" 2>/dev/null)
+    b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
+    if [ -n "$t" ] && [ "$tw" != "1" ]; then echo 0 > "$t" 2>/dev/null; fi
     if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
     settings put system screen_brightness_mode 1 2>/dev/null
     settings put system screen_off_timeout 30000 2>/dev/null
@@ -166,8 +179,11 @@ redim() {
 
 blockoff() {
   touch "$STOPF" 2>/dev/null   # сторож увидит и выйдет сам, не восстанавливая повторно
-  t=$(cat "$ST/touch" 2>/dev/null); b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
-  [ -n "$t" ] && echo 0 > "$t" 2>/dev/null
+  t=$(cat "$ST/touch" 2>/dev/null); tw=$(cat "$ST/touch_was" 2>/dev/null)
+  b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
+  # Тач включаем обратно только если инхибировали его МЫ (см. blockon) — иначе снимем чужую
+  # блокировку (VR Monitor).
+  if [ -n "$t" ] && [ "$tw" != "1" ]; then echo 0 > "$t" 2>/dev/null; fi
   if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
   settings put system screen_brightness_mode 1 2>/dev/null
   settings put system screen_off_timeout 30000 2>/dev/null
