@@ -146,24 +146,12 @@ blockon() { # <app_pid>
   fi
   log "blockon: touch=$touchp(was $touch_was) bl=$bl(was $blval) app_pid=$pid"
 
-  # Root-сторож: если приложение исчезнет (OOM/краш) без команды blockoff, телефон не
-  # должен остаться намертво чёрным и нетрогаемым. Следит за /proc/<pid> самого процесса,
-  # а не за пульсом от приложения — таймеры Doze может не пустить, /proc — нет.
-  (
-    while [ -d "/proc/$pid" ]; do
-      [ -f "$STOPF" ] && exit 0
-      grep -q "$PKG" "/proc/$pid/cmdline" 2>/dev/null || break
-      sleep 2
-    done
-    [ -f "$STOPF" ] && exit 0
-    t=$(cat "$ST/touch" 2>/dev/null); tw=$(cat "$ST/touch_was" 2>/dev/null)
-    b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
-    if [ -n "$t" ] && [ "$tw" != "1" ]; then echo 0 > "$t" 2>/dev/null; fi
-    if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
-    settings put system screen_brightness_mode 1 2>/dev/null
-    settings put system screen_off_timeout 30000 2>/dev/null
-    log "blockon-сторож: приложение (pid $pid) исчезло — откатил сам"
-  ) &
+  # Сторож — ОТДЕЛЬНЫЙ файл через nohup, не инлайн `(...)&`: последний спавнился из
+  # pipe-подшелла (inotifyd | while read, см. низ файла) и не отрабатывал предсказуемо —
+  # внешний скрипт снимает саму неоднозначность (см. watchdog_block.sh, тот же приём
+  # что в vr-usb-monitor).
+  nohup sh "$MODDIR/watchdog_block.sh" "$pid" "$STOPF" "$touchp" "$touch_was" "$bl" "$blval" "$PKG" \
+    >/dev/null 2>&1 &
   reply ok "blocked touch=$touchp bl=$bl"
 }
 
