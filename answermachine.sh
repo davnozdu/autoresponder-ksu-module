@@ -18,14 +18,17 @@
 #   blockon <app_pid>             железно: подсветка в 0 + тачскрин выключен на уровне ядра
 #   redim                         повторно погасить подсветку (см. комментарий у blockon)
 #   blockoff                      вернуть подсветку и тач как было
-#   recstart <wav_abspath> <max_sec>  своя запись звонка через `bin/pal_record` (incall-record
+#   recstart <max_sec>            своя запись звонка через `bin/pal_record` (incall-record
 #                                 тап, uplink+downlink) — на случай, если штатный рекордер
 #                                 OxygenOS не подхватится (видели ~1 звонок из 4 без файла
 #                                 вовсе). Пишем ПАРАЛЛЕЛЬНО штатному с самого начала звонка, не
 #                                 дожидаясь проверки — тап INCALL_RECORD рассчитан на несколько
-#                                 слушателей, конфликтовать физически нечему. Приложение само
-#                                 решает после звонка, какой из двух файлов оставить.
+#                                 слушателей, конфликтовать физически нечему. Буфер — в ОЗУ
+#                                 (tmpfs моста мессенджеров, files/bridge — уже смонтирован; на
+#                                 флеш ничего не пишется, пока не понадобится).
 #   recstop                       остановить свою запись, дождаться корректного WAV-заголовка
+#   recsave <dst_abspath>         штатный рекордер не сработал — скопировать буфер на диск
+#   recdiscard                    штатный рекордер сработал — стереть буфер, диск не трогаем
 # Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
 #
 # SELinux в enforcing НЕ мешает этому пути (проверено на устройстве): запись pal_stream_write
@@ -54,6 +57,11 @@ RESP=$DIR/resp
 PIDF=$DIR/.playpid
 RECPIDF=$DIR/.recpid
 RECSTOPF=$DIR/.recstop
+# Буфер своей записи: предпочтительно в tmpfs, который уже монтирует bridge.sh поверх
+# files/bridge (см. ensure_ram там) — здесь его только используем, повторно не монтируем.
+# Не смонтирован (мост выключен/не успел) — падаем на диск в $ST/callrec, там же и чистим
+# после смерти процесса. Один слот на файл: одновременно больше одного звонка не бывает.
+BRIDGE_DIR=/data/data/$PKG/files/bridge
 LOG="$MODDIR/answermachine.log"
 # Состояние железной блокировки экрана/тача — пути и сохранённая яркость между blockon/blockoff.
 ST="$MODDIR/.block"
@@ -203,16 +211,29 @@ stage_rec_bin() {
   [ -x "$REC_BIN" ]
 }
 
-recstart() { # <wav_abspath> <max_sec>
-  out=$1; maxsec=${2:-300}
+# Буфер в tmpfs моста, если он смонтирован (тогда на флеш ничего не пишется, пока не
+# понадобится recsave), иначе на диск в $ST — тот же принцип, что и у самого моста
+# (ensure_ram в bridge.sh): не смонтировалось — работаем как раньше, не ломаем функцию
+# ради экономии флеша.
+is_bridge_ram() {
+  awk -v d="$BRIDGE_DIR" '$5==d && index($0," - tmpfs ")>0 {f=1} END{exit !f}' \
+    /proc/self/mountinfo 2>/dev/null
+}
+rec_wav_path() {
+  if is_bridge_ram; then echo "$BRIDGE_DIR/callrec/rec.wav"
+  else echo "$ST/callrec/rec.wav"; fi
+}
+
+recstart() { # <max_sec>
+  maxsec=${1:-300}
   case "$maxsec" in ''|*[!0-9]*) maxsec=300 ;; esac
-  [ -n "$out" ] || { reply err nopath; return; }
   [ -x "$REC_BIN" ] || { stage_rec_bin || { reply err nobin; return; }; }
-  mkdir -p "${out%/*}" 2>/dev/null
-  rm -f "$RECSTOPF"
-  "$REC_BIN" "$out" "$maxsec" "$RECSTOPF" 0 >> "$LOG" 2>&1 &
+  w=$(rec_wav_path)
+  mkdir -p "${w%/*}" 2>/dev/null
+  rm -f "$RECSTOPF" "$w"
+  "$REC_BIN" "$w" "$maxsec" "$RECSTOPF" 0 >> "$LOG" 2>&1 &
   echo $! > "$RECPIDF"
-  log "recstart: $out max=${maxsec}s (pid $!)"
+  log "recstart: max=${maxsec}s (pid $!) -> $w"
   reply ok "recstart"
 }
 
@@ -227,6 +248,32 @@ recstop() {
   rm -f "$RECPIDF" "$RECSTOPF"
   log "recstop: done"
   reply ok "recstop"
+}
+
+# Штатный рекордер не сработал — переносим буфер из ОЗУ на диск (единственная реальная
+# запись на флеш ради этой функции, и только тогда, когда она правда нужна).
+recsave() { # <dst_abspath>
+  dst=$1
+  w=$(rec_wav_path)
+  [ -n "$dst" ] || { reply err nopath; return; }
+  [ -f "$w" ] || { log "recsave: нет буфера ($w)"; reply err nofile; return; }
+  mkdir -p "${dst%/*}" 2>/dev/null
+  if cp -f "$w" "$dst" 2>/dev/null; then
+    rm -f "$w"
+    log "recsave: $w -> $dst"
+    reply ok "recsave"
+  else
+    log "recsave: cp не удался $w -> $dst"
+    reply err copyfail
+  fi
+}
+
+# Штатный рекордер сработал — свой буфер больше не нужен, диск не трогаем вовсе.
+recdiscard() {
+  w=$(rec_wav_path)
+  rm -f "$w"
+  log "recdiscard: $w удалён"
+  reply ok "recdiscard"
 }
 
 handle() {
@@ -244,8 +291,10 @@ handle() {
     blockon)   blockon "$1" ;;
     redim)     redim ;;
     blockoff)  blockoff ;;
-    recstart)  recstart "$1" "$2" ;;
+    recstart)  recstart "$1" ;;
     recstop)   recstop ;;
+    recsave)   recsave "$1" ;;
+    recdiscard) recdiscard ;;
     *)       log "неизвестная команда: $cmd" ;;
   esac
 }
@@ -278,6 +327,10 @@ prepare() {
 FIFO="$MODDIR/.req_fifo"
 
 : > "$LOG"; log "answermachine start (pid $$)"
+# ОЗУ-буфер (files/bridge/callrec) сам исчезает при перезагрузке — чистить нечего. А вот
+# дисковый fallback ($ST/callrec) мог остаться от аварийно прерванной сессии (краш
+# приложения/модуля между recstart и recsave/recdiscard) — на флеше он бы копился незаметно.
+rm -rf "$ST/callrec" 2>/dev/null
 # inotifyd будит демон на каждую запись req — без опроса, без расхода батареи.
 # Если inode req пересоздан (переустановка приложения), inotifyd выходит — заводим заново.
 #
