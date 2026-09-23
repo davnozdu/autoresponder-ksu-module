@@ -1,10 +1,14 @@
-## v0.3.0 — voice answering machine (WIP, testing on device)
+## v0.3.0 — voice answering machine
 - Bundle native `bin/pal_inject` (aarch64): opens PAL_STREAM_VOICE_CALL_MUSIC to play a greeting
   into the live call uplink. Built from github.com/davnozdu/pal-inject (NDK, SM8850 PAL headers).
 - `answermachine.sh`: supervised root daemon that plays the greeting on request from the app
   (protocol in `files/am/req` → `resp`); the app itself answers, mutes, records and copies.
-- `sepolicy.rule`: scaffold for the targeted allow-rules that let pal_inject reach the PAL
-  service in enforcing (replaces global `setenforce 0`); exact rules to be tuned on-device.
+  Stages the binary to `/data/local/tmp` on every start before exec — running it directly from
+  the module directory fails to dlopen `/vendor/lib64/libpalclient.so` (linkerconfig picks the
+  linker namespace by path, and only `/data/local/tmp` is granted vendor-lib access on this ROM).
+- `sepolicy.rule` left empty on purpose: the write path works in plain enforcing once the daemon
+  isn't invoked through an interactive `adb shell` (that inherited an adbd-socket fd that
+  `hal_audio_default` isn't allowed to touch — a testing artifact, not a real policy gap).
 - Grant `ANSWER_PHONE_CALLS` so the app can auto-answer/end calls without becoming the default
   dialer (keeps OxygenOS built-in call recording).
 
