@@ -13,6 +13,8 @@
 #   play <wav_abspath> <loops>   проиграть приветствие в линию
 #   stop                          снять текущее проигрывание
 #   muteout on|off                mixer-mute выходного RX-устройства (fallback; см. ниже)
+#   screenoff                     выключить экран, если сейчас включён (input keyevent 26) —
+#                                 обычному приложению недоступно, только через root
 # Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
 #
 # SELinux в enforcing НЕ мешает этому пути (проверено на устройстве): запись pal_stream_write
@@ -81,6 +83,15 @@ muteout() { # on|off
   reply ok "muteout:$1:noop"
 }
 
+# KEYCODE_POWER — переключатель, поэтому шлём только если экран сейчас ВКЛЮЧЁН (иначе бы
+# наоборот разбудили). Состояние экрана надёжнее спрашивает приложение (PowerManager) и решает
+# слать команду или нет — но на всякий случай подстрахуемся тем же способом и здесь.
+screenoff() {
+  st=$(dumpsys power 2>/dev/null | grep -m1 'mWakefulness=')
+  case "$st" in *Awake*) input keyevent 26; log "screenoff: отправлено"; reply ok sent ;;
+  *) log "screenoff: экран и так не Awake ($st), пропуск"; reply ok "already-off" ;; esac
+}
+
 handle() {
   line=$(head -n1 "$REQ" 2>/dev/null) || return
   [ -n "$line" ] || return
@@ -88,9 +99,10 @@ handle() {
   set -- $line
   cmd=$1; shift
   case "$cmd" in
-    play)    play "$1" "$2" ;;
-    stop)    stop_play; reply ok stopped ;;
-    muteout) muteout "$1" ;;
+    play)      play "$1" "$2" ;;
+    stop)      stop_play; reply ok stopped ;;
+    muteout)   muteout "$1" ;;
+    screenoff) screenoff ;;
     *)       log "неизвестная команда: $cmd" ;;
   esac
 }
