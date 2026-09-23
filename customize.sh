@@ -15,6 +15,15 @@ else
   ui_print "! Module will still provision permissions once the app is present."
 fi
 
+# Нативный помощник голосового автоответчика — должен быть исполняемым (aarch64).
+PAL="$MODPATH/bin/pal_inject"
+if [ -f "$PAL" ]; then
+  set_perm "$PAL" 0 0 0755
+  ui_print "- Voice answering machine helper (pal_inject) installed"
+else
+  ui_print "! pal_inject helper missing — voice greeting will be unavailable"
+fi
+
 # Keep root recovery snapshots when the manager replaces the module directory.
 OLD=/data/adb/modules/autoresp_ksu
 if [ -d "$OLD/backup" ] && [ "$OLD" != "$MODPATH" ]; then

@@ -1,0 +1,35 @@
+# sepolicy.rule — адресные правила SELinux для голосового автоответчика (pal_inject).
+#
+# KernelSU применяет эти правила при загрузке (magiskpolicy). Цель — разрешить нативному
+# помощнику pal_inject обращаться к PAL-сервису (vendor.qti.hardware.pal / AGM) и передавать
+# аудио-буфер через shared memory, оставаясь в ENFORCING. Это замена глобальному
+# `setenforce 0`: трогаем только нужный путь, а не всю систему.
+#
+# ВАЖНО: точные строки зависят от домена, в котором KernelSU запускает демон/бинарь на
+# ЭТОМ устройстве, и от реальных denial'ов. Их надо снять на устройстве, потому что часть
+# аудио-denial'ов скрыта `dontaudit` и в обычном логе не видна. Процедура тюнинга:
+#
+#   1) su -c 'setenforce 0'                       # временно, только для снятия denial'ов
+#   2) удалить dontaudit, чтобы увидеть скрытое:  su -c 'magiskpolicy --live "allowxperm ..."' не нужно;
+#      включить полный аудит:                      su -c 'echo 1 > /sys/fs/selinux/checkreqprot' (не всегда)
+#      надёжнее — собрать denial'ы через auditd/logcat -b events во время реального прогона:
+#        su -c '/data/adb/modules/autoresp_ksu/bin/pal_inject /path/beep.raw 3 0'
+#      с активным звонком, затем:
+#        su -c 'dmesg | grep "avc: .*denied" ; logcat -d -b events | grep avc'
+#   3) для каждого denial добавить сюда строку:    allow <scontext> <tcontext> <class> { <perms> }
+#   4) su -c 'setenforce 1' и проверить, что pal_inject проходит в enforcing.
+#
+# Кандидаты (раскомментировать/поправить по реальным denial'ам с устройства).
+# Домен-источник обычно su-контекст модуля; уточнить: cat /proc/<pid pal_inject>/attr/current
+#
+# allow su hal_audio_service service_manager find
+# allow su audioserver binder { call transfer }
+# allow su hal_audio_default binder { call transfer }
+# allow su audioserver fd use
+# allow su hal_audio_default fd use
+# allow su audioserver_tmpfs file { read write map }
+# allow su ashmem_device chr_file { read write map open }
+# allow su hal_audio_default:fd use
+#
+# До заполнения правил проигрывание работает только в permissive — это ожидаемо и не
+# ломает остальную систему. Демон и приложение при этом стабильны.

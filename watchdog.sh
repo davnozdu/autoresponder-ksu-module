@@ -77,8 +77,11 @@ assert_all() {
   esac
 
   # 3) Runtime-права (грантим только отозванные)
+  # ANSWER_PHONE_CALLS — авто-ответ и отбой голосовым автоответчиком (acceptRingingCall/endCall)
+  # без роли дефолтной звонилки, чтобы сохранить встроенную автозапись OxygenOS.
   for p in RECEIVE_SMS SEND_SMS READ_SMS READ_PHONE_STATE READ_CALL_LOG \
-           READ_CONTACTS POST_NOTIFICATIONS READ_PHONE_NUMBERS WRITE_CALL_LOG; do
+           READ_CONTACTS POST_NOTIFICATIONS READ_PHONE_NUMBERS WRITE_CALL_LOG \
+           ANSWER_PHONE_CALLS; do
     full="android.permission.$p"
     if ! perm_granted "$full"; then
       pm grant "$PKG" "$full" 2>/dev/null && { log "recover: granted $p"; changed=1; }

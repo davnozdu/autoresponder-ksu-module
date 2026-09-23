@@ -29,5 +29,16 @@ rmdir "$MODDIR/.module-update-lock" "$MODDIR/.app-update-lock" 2>/dev/null
   done
 ) &
 
+# Голосовой автоответчик — root-демон проигрывания приветствия в линию (pal_inject).
+# Тоже под супервизором: приложение само отвечает/глушит/пишет, а сюда шлёт только то,
+# что требует root (см. answermachine.sh).
+(
+  while :; do
+    setsid sh "$MODDIR/answermachine.sh"
+    log "answermachine exited, restart in 60s"
+    sleep 60
+  done
+) &
+
 # Self-update модуля в фоне
 ( sh "$MODDIR/update-check.sh" >> "$LOG" 2>&1 ) &

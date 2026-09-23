@@ -1,3 +1,13 @@
+## Unreleased — voice answering machine (WIP)
+- Bundle native `bin/pal_inject` (aarch64): opens PAL_STREAM_VOICE_CALL_MUSIC to play a greeting
+  into the live call uplink. Built from github.com/davnozdu/pal-inject (NDK, SM8850 PAL headers).
+- `answermachine.sh`: supervised root daemon that plays the greeting on request from the app
+  (protocol in `files/am/req` → `resp`); the app itself answers, mutes, records and copies.
+- `sepolicy.rule`: scaffold for the targeted allow-rules that let pal_inject reach the PAL
+  service in enforcing (replaces global `setenforce 0`); exact rules to be tuned on-device.
+- Grant `ANSWER_PHONE_CALLS` so the app can auto-answer/end calls without becoming the default
+  dialer (keeps OxygenOS built-in call recording).
+
 ## v0.2.3
 - Grant SYSTEM_ALERT_WINDOW so the app can draw the caller card over the dialer.
 
