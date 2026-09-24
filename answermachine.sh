@@ -90,6 +90,7 @@ reply() { # <status> <detail> — REQID (id текущей команды) ст�
 
 stop_play() {
   [ -f "$PIDF" ] && { kill "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; rm -f "$PIDF"; }
+  rm -f "$PIDF.args"
   pkill -f "$BIN" 2>/dev/null
 }
 
@@ -97,11 +98,19 @@ play() { # <wav> <loops>
   wav=$1; loops=${2:-3}
   case "$loops" in ''|*[!0-9]*) loops=3 ;; esac
   [ -f "$wav" ] || { log "play: нет файла $wav"; reply err nofile; return; }
+  # Дубль той же команды (inotifyd, см. recstart) раньше рестартовал проигрывание с начала —
+  # абонент слышал, как приветствие дёргается назад на старт по несколько раз за звонок
+  # (поймано живыми звонками). Тот же wav+loops уже играет — no-op, а не рестарт.
+  if [ -f "$PIDF" ] && [ -d "/proc/$(cat "$PIDF" 2>/dev/null)" ] && \
+     [ "$(cat "$PIDF.args" 2>/dev/null)" = "$wav $loops" ]; then
+    reply ok "play:already"; return
+  fi
   [ -x "$BIN" ] || { stage_bin || { reply err nobin; return; }; }
   stop_play
   # devid=0: устройство PAL берёт из активной голосовой сессии.
   "$BIN" "$wav" "$loops" 0 >> "$LOG" 2>&1 &
   echo $! > "$PIDF"
+  echo "$wav $loops" > "$PIDF.args"
   log "play: $wav x$loops (pid $!)"
   reply ok "play:$loops"
 }
