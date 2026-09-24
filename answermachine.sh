@@ -229,6 +229,13 @@ rec_wav_path() {
 recstart() { # <max_sec>
   maxsec=${1:-300}
   case "$maxsec" in ''|*[!0-9]*) maxsec=300 ;; esac
+  # inotifyd иногда доставляет несколько событий на одну запись в req (см. FIFO-цикл внизу
+  # файла) — recstart без этой проверки на живом звонке отработала 3 раза подряд на одну
+  # команду: три process'а pal_record гонялись за одним и тем же incall-record тапом, второй
+  # и третий падали pal_stream_open=-22. Уже идущая запись — не повод переоткрывать поток.
+  if [ -f "$RECPIDF" ] && [ -d "/proc/$(cat "$RECPIDF" 2>/dev/null)" ]; then
+    reply ok "recstart:already"; return
+  fi
   [ -x "$REC_BIN" ] || { stage_rec_bin || { reply err nobin; return; }; }
   w=$(rec_wav_path)
   mkdir -p "${w%/*}" 2>/dev/null
