@@ -219,6 +219,13 @@ drop_orphans() {
   for _d in "$DIR"/*; do
     [ -d "$_d" ] || continue
     _t=$(basename "$_d")
+    # callrec — не копия базы мессенджера, а RAM-буфер записи звонка (answermachine.sh),
+    # который живёт тут же (files/bridge — уже смонтированный tmpfs, отдельный маунт не
+    # заводим). $_t никогда не найдётся в $DBS, и без этой проверки обычный проход
+    # drop_orphans считал его сиротой и стирал rm -rf прямо во время записи разговора —
+    # владением/жизненным циклом этого каталога управляет только answermachine.sh
+    # (recstart/recstop/recsave/recdiscard + чистка при старте демона).
+    [ "$_t" = "callrec" ] && continue
     _src=""
     for _e in $DBS; do
       [ "${_e%%:*}" = "$_t" ] && { _src=${_e#*:}; break; }

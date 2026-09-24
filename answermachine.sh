@@ -9,15 +9,18 @@
 # Всё остальное (авто-ответ, мьют микрофона, громкость, отбой, копирование записи)
 # делает само приложение своими правами — здесь только то, что требует root.
 #
-# Протокол (app-private, /data/data/$PKG/files/am/), одна команда на запись в req:
-#   play <wav_abspath> <loops>   проиграть приветствие в линию
+# Протокол (app-private, /data/data/$PKG/files/am/), одна команда на запись в req,
+# ПЕРВЫЙ токен строки — id команды (произвольная строка без пробелов, ставит приложение):
+#   <id> play <wav_abspath> <loops>   проиграть приветствие в линию
 #   stop                          снять текущее проигрывание
 #   muteout on|off                mixer-mute выходного RX-устройства (fallback; см. ниже)
 #   screenoff                     выключить экран, если сейчас включён (input keyevent 26) —
 #                                 обычному приложению недоступно, только через root
-#   blockon <app_pid>             железно: подсветка в 0 + тачскрин выключен на уровне ядра
-#   redim                         повторно погасить подсветку (см. комментарий у blockon)
-#   blockoff                      вернуть подсветку и тач как было
+#   blockon <app_pid>             железно: подсветка в 0 + тачскрин выключен на уровне ядра;
+#                                 сам же держит подсветку в 0 локальным циклом (redim_loop.sh,
+#                                 см. комментарий там) — DisplayManager перебивает её через
+#                                 пару секунд, без отдельной IPC-команды с той же стороны
+#   blockoff                      вернуть подсветку и тач как было, остановить оба цикла
 #   recstart <max_sec>            своя запись звонка через `bin/pal_record` (incall-record
 #                                 тап, uplink+downlink) — на случай, если штатный рекордер
 #                                 OxygenOS не подхватится (видели ~1 звонок из 4 без файла
@@ -29,7 +32,10 @@
 #   recstop                       остановить свою запись, дождаться корректного WAV-заголовка
 #   recsave <dst_abspath>         штатный рекордер не сработал — скопировать буфер на диск
 #   recdiscard                    штатный рекордер сработал — стереть буфер, диск не трогаем
-# Ответ пишем в resp: "<epoch> ok|err <detail>" (chown+chcon под приложение, чтобы читалось).
+# Ответ пишем в resp: "<epoch> <id> ok|err <detail>" (id — тот же, что был в req; chown+chcon
+# под приложение, чтобы читалось). id в ответе — чтобы приложение не приняло за ACK старый
+# resp от предыдущей команды или ответ на одинаковую команду, посланную секундой раньше
+# (раньше ack сверяли просто "текст resp изменился").
 #
 # SELinux в enforcing НЕ мешает этому пути (проверено на устройстве): запись pal_stream_write
 # блокировалась только при ручном тестировании через `adb shell` — PAL-сервис (hal_audio_default)
@@ -75,8 +81,8 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
 app_uid() { stat -c %u "/data/data/$PKG/files" 2>/dev/null; }
 app_ctx() { ls -dZ "/data/data/$PKG/files" 2>/dev/null | awk '{print $1}'; }
 
-reply() { # <status> <detail>
-  printf '%s %s %s\n' "$(date +%s)" "$1" "$2" > "$RESP" 2>/dev/null || return
+reply() { # <status> <detail> — REQID (id текущей команды) ставит handle() перед разбором
+  printf '%s %s %s %s\n' "$(date +%s)" "$REQID" "$1" "$2" > "$RESP" 2>/dev/null || return
   u=$(app_uid); [ -n "$u" ] && chown "$u:$u" "$RESP" 2>/dev/null
   c=$(app_ctx); [ -n "$c" ] && chcon "$c" "$RESP" 2>/dev/null
   chmod 600 "$RESP" 2>/dev/null
@@ -172,17 +178,13 @@ blockon() { # <app_pid>
   # что в vr-usb-monitor).
   nohup sh "$MODDIR/watchdog_block.sh" "$pid" "$STOPF" "$touchp" "$touch_was" "$bl" "$blval" "$PKG" \
     >/dev/null 2>&1 &
+  # DisplayManager перебивает первую запись в подсветку через пару секунд (проверено в
+  # vr-usb-monitor) — раньше приложение перебивало её обратно IPC-командой redim на каждом
+  # тике своего цикла ожидания (файл + ответ + chown/chcon + лог — до ~33 раз в секунду на
+  # весь звонок); теперь тот же тик крутит локальный цикл демона без всякого IPC. Тот же
+  # $STOPF, что и у сторожа, глушит оба разом.
+  nohup sh "$MODDIR/redim_loop.sh" "$STOPF" "$bl" >/dev/null 2>&1 &
   reply ok "blocked touch=$touchp bl=$bl"
-}
-
-# DisplayManager перебивает первую запись в подсветку через пару секунд (проверено в
-# vr-usb-monitor) — приложение шлёт эту команду на каждом тике своего цикла, пока
-# блокировка активна.
-redim() {
-  [ -f "$ST/bl" ] || return
-  bl=$(cat "$ST/bl" 2>/dev/null)
-  [ -n "$bl" ] && echo 0 > "$bl" 2>/dev/null
-  reply ok redimmed
 }
 
 blockoff() {
@@ -203,7 +205,7 @@ blockoff() {
 # файла). devid=0: устройство PAL берёт из активной голосовой сессии, как и play().
 stage_rec_bin() {
   [ -f "$REC_SRC" ] || return 1
-  if [ ! -x "$REC_BIN" ] || [ "$(stat -c %s "$REC_SRC" 2>/dev/null)" != "$(stat -c %s "$REC_BIN" 2>/dev/null)" ]; then
+  if [ ! -x "$REC_BIN" ] || [ "$(bin_hash "$REC_SRC")" != "$(bin_hash "$REC_BIN")" ]; then
     cp -f "$REC_SRC" "$REC_BIN" 2>/dev/null || return 1
     chmod 755 "$REC_BIN" 2>/dev/null
     chcon u:object_r:shell_data_file:s0 "$REC_BIN" 2>/dev/null
@@ -282,6 +284,7 @@ handle() {
   log "recv: $line"
   # shellcheck disable=SC2086
   set -- $line
+  REQID=$1; shift
   cmd=$1; shift
   case "$cmd" in
     play)      play "$1" "$2" ;;
@@ -289,7 +292,6 @@ handle() {
     muteout)   muteout "$1" ;;
     screenoff) screenoff ;;
     blockon)   blockon "$1" ;;
-    redim)     redim ;;
     blockoff)  blockoff ;;
     recstart)  recstart "$1" ;;
     recstop)   recstop ;;
@@ -299,12 +301,16 @@ handle() {
   esac
 }
 
+# sha256, не размер: обновлённый бинарь той же длины (частый случай — пересборка без
+# смены функциональности) раньше проходил бы как "не изменился" и модуль продолжал бы
+# работать со старым.
+bin_hash() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
 # Копирует бинарь из модуля в /data/local/tmp (см. комментарий выше про linkerconfig).
-# Перекопируем, если ещё не сделано или source изменился (обновление модуля) — сверяем
-# размер, дешёво и достаточно для целостности при апдейте.
+# Перекопируем, если ещё не сделано или source изменился (обновление модуля).
 stage_bin() {
   [ -f "$SRC" ] || return 1
-  if [ ! -x "$BIN" ] || [ "$(stat -c %s "$SRC" 2>/dev/null)" != "$(stat -c %s "$BIN" 2>/dev/null)" ]; then
+  if [ ! -x "$BIN" ] || [ "$(bin_hash "$SRC")" != "$(bin_hash "$BIN")" ]; then
     cp -f "$SRC" "$BIN" 2>/dev/null || return 1
     chmod 755 "$BIN" 2>/dev/null
     chcon u:object_r:shell_data_file:s0 "$BIN" 2>/dev/null
