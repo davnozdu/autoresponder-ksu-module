@@ -1,7 +1,7 @@
 id=autoresp_ksu
 name=Auto SMS/Call Responder
-version=v0.3.3
-versionCode=303
+version=v0.3.4
+versionCode=304
 author=davnozdu
 description=Provisions and protects the Auto-Responder app (grants runtime perms, assigns CALL_SCREENING role, enables notification listener, Doze whitelist) and bridges WhatsApp/Telegram/Google Messages databases to it so the assistant keeps conversation context. Supports self-update.
 updateJson=https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/update.json
