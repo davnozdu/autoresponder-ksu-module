@@ -1,6 +1,12 @@
 {
+<<<<<<< Updated upstream
   "version": "v0.3.5",
   "versionCode": 305,
   "zipUrl": "https://github.com/davnozdu/autoresponder-ksu-module/releases/download/v0.3.5/autoresponder-ksu-module.zip",
+=======
+  "version": "v0.3.6",
+  "versionCode": 306,
+  "zipUrl": "https://github.com/davnozdu/autoresponder-ksu-module/releases/download/v0.3.6/autoresponder-ksu-module.zip",
+>>>>>>> Stashed changes
   "changelog": "https://raw.githubusercontent.com/davnozdu/autoresponder-ksu-module/main/CHANGELOG.md"
 }
