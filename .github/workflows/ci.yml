@@ -1,0 +1,50 @@
+name: CI checks
+
+# Раньше проверка модуля запускалась только по тегу v* (см. release.yml) — ошибка в shell-
+# скрипте или JSON обнаруживалась только на релизе. Этот workflow гоняет дешёвые статические
+# проверки на каждый push/PR в main, до релизного тега. Найдено внешним аудитом.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверка синтаксиса shell-скриптов (sh -n)
+        run: |
+          fail=0
+          for f in *.sh; do
+            echo "== $f =="
+            sh -n "$f" || fail=1
+          done
+          exit $fail
+
+      - name: ShellCheck
+        run: |
+          fail=0
+          for f in *.sh; do
+            shellcheck -S warning "$f" || fail=1
+          done
+          exit $fail
+
+      - name: Валидность update.json
+        run: jq -e . update.json > /dev/null
+
+      - name: Нет маркеров незавершённого merge
+        run: |
+          if grep -rEn '^(<<<<<<<|=======|>>>>>>>)' --include='*.sh' --include='*.prop' --include='*.json' --include='*.md' .; then
+            echo "Найдены маркеры конфликта слияния"
+            exit 1
+          fi
+
+      - name: Пробная упаковка ZIP модуля
+        run: |
+          zip -r autoresponder-ksu-module.zip . -x '.git/*' -x '.github/*' -x '*.md' -x 'provision.log'
+          unzip -l autoresponder-ksu-module.zip
+          unzip -l autoresponder-ksu-module.zip | grep -q 'module.prop' || { echo "module.prop не попал в архив"; exit 1; }
+          unzip -l autoresponder-ksu-module.zip | grep -q 'customize.sh' || { echo "customize.sh не попал в архив"; exit 1; }
