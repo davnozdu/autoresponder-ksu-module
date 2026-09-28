@@ -309,11 +309,24 @@ recdiscard() {
 handle() {
   line=$(head -n1 "$REQ" 2>/dev/null) || return
   [ -n "$line" ] || return
-  log "recv: $line"
   # shellcheck disable=SC2086
   set -- $line
   REQID=$1; shift
   cmd=$1; shift
+  # inotifyd дублирует доставку одной и той же записи в req — на живом звонке видели recsave
+  # исполнявшийся трижды подряд на один REQID: первый раз успешно cp+rm буфера, второй и
+  # третий — "нет буфера" (файл уже удалён первым), потому что recsave() сам по себе
+  # деструктивен и не идемпотентен. Раньше от дублей защищались per-команда (recstart —
+  # проверкой живого процесса, play — сравнением .args) — но это ad-hoc и не покрывало
+  # recsave/recstop/recdiscard. Общий REQID-гвард на входе диспетчера закрывает весь класс
+  # дублей разом: тот же REQID второй раз просто не исполняем и не отвечаем повторно —
+  # первый ответ уже лежит в resp, приложение его и дождётся.
+  if [ "$REQID" = "$LAST_REQID" ]; then
+    log "recv (дубль, пропуск): $line"
+    return
+  fi
+  LAST_REQID=$REQID
+  log "recv: $line"
   case "$cmd" in
     play)      play "$1" "$2" ;;
     stop)      stop_play; reply ok stopped ;;
