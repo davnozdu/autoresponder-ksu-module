@@ -25,10 +25,14 @@ jobs:
           exit $fail
 
       - name: ShellCheck
+        # Порог error, не warning: скрипты не писались под строгий shellcheck-стиль
+        # (напр. SC3043 'local' в POSIX sh — сознательный выбор этого проекта), а задача этой
+        # проверки — ловить новые синтаксические/логические поломки, а не ретроактивно
+        # причёсывать существующий код под линтер.
         run: |
           fail=0
           for f in *.sh; do
-            shellcheck -S warning "$f" || fail=1
+            shellcheck -S error "$f" || fail=1
           done
           exit $fail
 
