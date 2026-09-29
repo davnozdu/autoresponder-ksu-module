@@ -6,10 +6,20 @@ PKG=com.davnozdu.autoresponder
 ui_print "- Auto SMS/Call Responder module"
 ui_print "- Target app package: $PKG"
 
-# APK кладётся CI в system/priv-app/AutoResponder/AutoResponder.apk
+# APK кладётся CI в корень модуля; здесь раскладываем его как ПРИВИЛЕГИРОВАННОЕ
+# системное приложение (/system/priv-app), чтобы приложение держало
+# signature|privileged-разрешения захвата аудио (CAPTURE_AUDIO_OUTPUT и др.) через
+# privapp-permissions (system/etc/permissions/privapp-permissions-*.xml). Обычному
+# /data-приложению их выдать нельзя даже под root. Запись звонков в мессенджерах
+# тогда работает in-process (пакет msgrec) без отдельных сервисов и polling.
 APK="$MODPATH/AutoResponder.apk"
 if [ -f "$APK" ]; then
-  ui_print "- Bundled APK found; will be installed via pm on boot"
+  ui_print "- Bundled APK found; staging as privileged system app (priv-app)"
+  mkdir -p "$MODPATH/system/priv-app/AutoResponder"
+  cp -f "$APK" "$MODPATH/system/priv-app/AutoResponder/AutoResponder.apk"
+  set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
+  [ -d "$MODPATH/system/etc/permissions" ] && set_perm_recursive "$MODPATH/system/etc/permissions" 0 0 0755 0644
+  ui_print "- Staged to /system/priv-app; privapp-permissions applied on reboot"
 else
   ui_print "! No bundled APK in module. Install the app manually (adb/apk)."
   ui_print "! Module will still provision permissions once the app is present."
