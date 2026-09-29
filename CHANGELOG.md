@@ -1,3 +1,14 @@
+## v0.4.0 — запись звонков в мессенджерах (overlay-free)
+- Запись звонков WhatsApp/Telegram: shell-хост под uid 2000 (`msgr-host.sh`) заранее
+  регистрирует AudioPolicy `LOOP_BACK_RENDER` и пишет обе стороны (far через REMOTE_SUBMIX,
+  near через MIC), простаивая на локальном сокете без опроса. Проверено на OnePlus 15.
+- Определение звонящего мессенджера — по активному уведомлению звонка (приложение), без
+  привилегий. Поэтому модулю БОЛЬШЕ НЕ НУЖЕН `/system`-overlay: убраны priv-app,
+  privapp-permissions и hiddenapi-sysconfig, приложение ставится обычным `pm install`.
+  Снята зависимость от метамодуля `meta-overlayfs` (в KernelSU Next 3.4+ встроенного
+  монтирования модулей нет).
+- `msgr-host.sh`: экспоненциальный бэкофф при быстрых падениях и ротация лога.
+
 ## v0.3.1
 - Fix `answermachine.sh` losing commands after `blockon`: the daemon read requests via
   `inotifyd | while read`, and in POSIX shells the right side of a pipe runs in a subshell.
