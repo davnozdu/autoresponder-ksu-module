@@ -1,5 +1,7 @@
 # Auto SMS/Call Responder — KernelSU module
 
+Контекст для следующих LLM по работе shell-хоста и отказу от `meta-overlayfs`: [AGENTS.md](AGENTS.md).
+
 Модуль-обёртка для приложения-автоответчика (`com.davnozdu.autoresponder`).
 Сам логику не содержит — обеспечивает работу приложения на OxygenOS/ColorOS.
 
