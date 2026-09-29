@@ -40,5 +40,9 @@ rmdir "$MODDIR/.module-update-lock" "$MODDIR/.app-update-lock" 2>/dev/null
   done
 ) &
 
+# VoIP: one shell-UID app_process owns the pre-armed AudioPolicy and sleeps on a socket
+# between calls. It restarts automatically after an APK update or process death.
+( setsid sh "$MODDIR/msgr-host.sh" ) &
+
 # Self-update модуля в фоне
 ( sh "$MODDIR/update-check.sh" >> "$LOG" 2>&1 ) &

@@ -11,7 +11,8 @@ ui_print "- Target app package: $PKG"
 # signature|privileged-разрешения захвата аудио (CAPTURE_AUDIO_OUTPUT и др.) через
 # privapp-permissions (system/etc/permissions/privapp-permissions-*.xml). Обычному
 # /data-приложению их выдать нельзя даже под root. Запись звонков в мессенджерах
-# тогда работает in-process (пакет msgrec) без отдельных сервисов и polling.
+# Системные разрешения и скрытые API доступны приложению; сам двухканальный
+# захват выполняет shell-хост модуля, так как Android глушит MIC у фонового UID.
 APK="$MODPATH/AutoResponder.apk"
 if [ -f "$APK" ]; then
   ui_print "- Bundled APK found; staging as privileged system app (priv-app)"
@@ -19,6 +20,7 @@ if [ -f "$APK" ]; then
   cp -f "$APK" "$MODPATH/system/priv-app/AutoResponder/AutoResponder.apk"
   set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
   [ -d "$MODPATH/system/etc/permissions" ] && set_perm_recursive "$MODPATH/system/etc/permissions" 0 0 0755 0644
+  [ -d "$MODPATH/system/etc/sysconfig" ] && set_perm_recursive "$MODPATH/system/etc/sysconfig" 0 0 0755 0644
   ui_print "- Staged to /system/priv-app; privapp-permissions applied on reboot"
 else
   ui_print "! No bundled APK in module. Install the app manually (adb/apk)."
