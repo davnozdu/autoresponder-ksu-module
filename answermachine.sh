@@ -63,6 +63,10 @@ RESP=$DIR/resp
 PIDF=$DIR/.playpid
 RECPIDF=$DIR/.recpid
 RECSTOPF=$DIR/.recstop
+# pid текущей записи — по нему сторож (rec_guard.sh) узнаёт, что его сессию сменила новая.
+RECSESSF=$DIR/.recsess
+# Куда сторож переносит буфер, который приложение так и не забрало (журнал подхватывает).
+RESCUE_DIR=/sdcard/AutoResponder/recordings/rescued
 # Буфер своей записи: предпочтительно в tmpfs, который уже монтирует bridge.sh поверх
 # files/bridge (см. ensure_ram там) — здесь его только используем, повторно не монтируем.
 # Не смонтирован (мост выключен/не успел) — падаем на диск в $ST/callrec, там же и чистим
@@ -262,8 +266,14 @@ recstart() { # <max_sec>
   mkdir -p "${w%/*}" 2>/dev/null
   rm -f "$RECSTOPF" "$w"
   "$REC_BIN" "$w" "$maxsec" "$RECSTOPF" 0 >> "$LOG" 2>&1 &
-  echo $! > "$RECPIDF"
-  log "recstart: max=${maxsec}s (pid $!) -> $w"
+  rpid=$!
+  echo "$rpid" > "$RECPIDF"
+  echo "$rpid" > "$RECSESSF"
+  # Сторож освобождает ОЗУ-буфер, если приложение его так и не заберёт (см. rec_guard.sh).
+  # Отдельный файл через nohup — по той же причине, что и watchdog_block.sh в blockon.
+  nohup sh "$MODDIR/rec_guard.sh" "$rpid" "$w" "$RECSTOPF" "$RECSESSF" "$LOG" "$RESCUE_DIR" \
+    "$(date '+%y%m%d%H%M')" </dev/null >/dev/null 2>&1 &
+  log "recstart: max=${maxsec}s (pid $rpid) -> $w"
   reply ok "recstart"
 }
 
