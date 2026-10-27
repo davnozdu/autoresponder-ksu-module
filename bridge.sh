@@ -42,8 +42,12 @@ RESP=$DIR/response
 LOG="$MODDIR/bridge.log"
 
 # Потолок tmpfs. Это ВЕРХНЯЯ граница, а не занятая память: tmpfs берёт ровно столько,
-# сколько лежит внутри (сейчас около 180 МБ при 15 ГБ ОЗУ).
-RAM_SIZE=512M
+# сколько лежит внутри (копии баз — около 180 МБ при 15 ГБ ОЗУ). Сюда же пишется своя
+# запись звонка (answermachine.sh, callrec/rec.wav): WAV 48кГц стерео ≈ 11,5 МБ/мин, а
+# приложение держит её весь принятый разговор, до 3 часов (≈2,1 ГБ). При 512М буфер
+# кончался на ~40-й минуте и запись обрывалась.
+RAM_SIZE=3G
+RAM_SIZE_KB=3145728
 
 # Не чаще одного ОБЫЧНОГО прогона в MIN_GAP секунд: приложение просит обновление перед
 # каждым ответом, а клиент в переписке пишет очередями по несколько сообщений.
@@ -115,8 +119,23 @@ ram_ok() {
   [ "$(stat -c %u "$DIR" 2>/dev/null)" = "$(app_uid)" ]
 }
 
+# Смонтированный прошлой версией модуля tmpfs мог остаться с меньшим потолком — tmpfs
+# умеет менять размер на лету через remount, содержимое при этом не трогается.
+ram_grow() {
+  cur=$(awk -v d="$DIR" '$2==d && $3=="tmpfs" {
+          n=split($4,o,","); for(i=1;i<=n;i++) if (o[i] ~ /^size=/) { sub(/^size=/,"",o[i]); sub(/k$/,"",o[i]); print o[i]; exit } }' \
+        /proc/mounts 2>/dev/null)
+  case "$cur" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$cur" -ge "$RAM_SIZE_KB" ] && return 0
+  if mount -o "remount,size=$RAM_SIZE" "$DIR" 2>/dev/null; then
+    log "потолок ОЗУ-копий поднят: ${cur}k -> $RAM_SIZE"
+  else
+    log "не удалось поднять потолок ОЗУ-копий (${cur}k -> $RAM_SIZE)"
+  fi
+}
+
 ensure_ram() {
-  ram_ok && return 0
+  ram_ok && { ram_grow; return 0; }
   uid=$(app_uid)
   [ -n "$uid" ] || return 1
   if is_tmpfs "$DIR"; then
