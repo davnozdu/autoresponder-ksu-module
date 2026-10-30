@@ -47,20 +47,38 @@ fi
 [ -z "$url" ] && { log "no apk asset"; exit 0; }
 
 log "update $inst -> $tag, downloading"
-curl -fsSL --proto '=https' --max-time 120 -o /data/local/tmp/ar_upd.apk "$url" || { log "download failed"; exit 0; }
+# Качаем и проверяем в каталоге модуля (0700, root). Раньше и загрузка, и проверка шли в
+# /data/local/tmp — каталоге, доступном на запись uid 2000, под которым работает msgr-host.sh.
+# Между проверкой подписи и `pm install` файл можно было подменить, и установка пошла бы с
+# правами root. Теперь в общий каталог попадает только уже проверенный файл, и его хэш
+# сверяется ещё раз непосредственно перед установкой.
+UPD=$MODDIR/.app-upd
+rm -rf "$UPD" 2>/dev/null
+mkdir -p "$UPD"
+curl -fsSL --proto '=https' --max-time 120 -o "$UPD/ar.apk" "$url" || { log "download failed"; rm -rf "$UPD"; exit 0; }
 installed_apk=$(pm path "$PKG" | sed -n 's/^package://p' | head -1)
-if ! CLASSPATH="$installed_apk" app_process /system/bin com.davnozdu.autoresponder.update.ReleaseVerifier apk /data/local/tmp/ar_upd.apk; then
+if ! CLASSPATH="$installed_apk" app_process /system/bin com.davnozdu.autoresponder.update.ReleaseVerifier apk "$UPD/ar.apk"; then
   log "APK verification failed; not installed"
-  rm -f /data/local/tmp/ar_upd.apk
+  rm -rf "$UPD"
   exit 0
 fi
+h1=$(sha256sum "$UPD/ar.apk" 2>/dev/null | cut -d' ' -f1)
 cp "$installed_apk" "$MODDIR/previous.apk" || exit 0
+cp -f "$UPD/ar.apk" /data/local/tmp/ar_upd.apk || { log "copy to tmp failed"; rm -rf "$UPD"; exit 0; }
+h2=$(sha256sum /data/local/tmp/ar_upd.apk 2>/dev/null | cut -d' ' -f1)
+if [ -z "$h1" ] || [ "$h1" != "$h2" ]; then
+  log "APK изменился после проверки подписи — установка отменена"
+  rm -f /data/local/tmp/ar_upd.apk
+  rm -rf "$UPD"
+  exit 0
+fi
 out=$(pm install -r /data/local/tmp/ar_upd.apk 2>&1)
 if echo "$out" | grep -qi Success; then
-  cp /data/local/tmp/ar_upd.apk "$MODDIR/AutoResponder.apk"
+  cp "$UPD/ar.apk" "$MODDIR/AutoResponder.apk"
   echo $((now + 86400)) > "$NEXT"
   log "installed verified $tag"
 else
   log "install failed: $out"
 fi
 rm -f /data/local/tmp/ar_upd.apk
+rm -rf "$UPD"

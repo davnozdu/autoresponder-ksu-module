@@ -19,13 +19,22 @@ RPID=$1; W=$2; RECSTOPF=$3; SESSF=$4; LOG=$5; RESCUE=$6; STAMP=$7
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') rec_guard[$RPID]: $*" >> "$LOG" 2>/dev/null; }
 mine() { [ "$(cat "$SESSF" 2>/dev/null)" = "$RPID" ]; }
 # mCallState: 0 — нет звонка, 1 — звонит, 2 — разговор (по строке на каждую SIM).
-in_call() { dumpsys telephony.registry 2>/dev/null | grep -q 'mCallState=[12]'; }
+# Возвращает 0 — идёт, 1 — не идёт, 2 — не смогли узнать. Пустой или незнакомый вывод — это
+# НЕ «звонка нет»: раньше смена формата dumpsys в прошивке приводила к обрыву записи
+# живого разговора через минуту. Неизвестность трактуем как «звонок идёт» (fail-open) —
+# буфер всё равно ограничен max_sec у pal_record.
+call_state() {
+  _d=$(dumpsys telephony.registry 2>/dev/null)
+  case "$_d" in *mCallState=*) : ;; *) return 2 ;; esac
+  echo "$_d" | grep -q 'mCallState=[12]' && return 0
+  return 1
+}
 
 # 1) Запись идёт — ждём конца звонка плюс минуту на штатный recstop от приложения.
 idle=0
 while [ -d "/proc/$RPID" ]; do
   mine || exit 0
-  if in_call; then idle=0; else idle=$((idle + 1)); fi
+  call_state; case $? in 0) idle=0 ;; 1) idle=$((idle + 1)) ;; *) idle=0 ;; esac
   if [ "$idle" -ge 4 ]; then                          # 4 × 15с без звонка
     log "звонка нет уже минуту, recstop не пришёл — останавливаю запись сам"
     touch "$RECSTOPF" 2>/dev/null

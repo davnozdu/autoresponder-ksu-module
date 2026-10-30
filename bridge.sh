@@ -74,7 +74,15 @@ rcs:/data/data/com.google.android.apps.messaging/databases/bugle_db"
 ONDEMAND="rcs"
 
 log() { echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"; }
-trim() { tail -n 300 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
+# Обрезка только когда лог реально вырос. Раньше `tail -n 300` + `mv` выполнялись на каждый
+# sync, то есть файл перезаписывался целиком даже с тремя строками — до ~1400 записей на
+# флеш в сутки. Ровно та экономия, ради которой мост копирует по отпечатку, а не целиком.
+LOG_MAX=32768
+trim() {
+  sz=$(stat -c %s "$LOG" 2>/dev/null) || return 0
+  [ "$sz" -gt "$LOG_MAX" ] || return 0
+  tail -n 300 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"
+}
 
 in_list() {
   for _w in $2; do [ "$_w" = "$1" ] && return 0; done
@@ -213,7 +221,18 @@ copy_db() {
   case $? in 2) return 1 ;; 0) CHANGED=1 ;; esac
   if [ "$has_wal" = "1" ]; then
     copy_file "$src-wal" "$dst/$base-wal" "$MODDIR/.src-$tag-wal"
-    case $? in 2) return 1 ;; 0) CHANGED=1 ;; esac
+    case $? in
+      2)
+        # База уже новая, а -wal остался от прошлого снимка (источник успел сделать
+        # checkpoint и удалить файл между `[ -f ]` и `cp`). Оставить их вместе нельзя:
+        # SQLite накатит старые кадры на свежую базу. Убираем хвост и говорим, что
+        # копия неполная — приложение тогда не читает снимок как целый.
+        rm -f "$dst/$base-wal" "$MODDIR/.src-$tag-wal" 2>/dev/null
+        log "копия $tag: -wal не скопировался — старый хвост убран"
+        return 1
+        ;;
+      0) CHANGED=1 ;;
+    esac
   else
     rm -f "$dst/$base-wal" "$MODDIR/.src-$tag-wal" 2>/dev/null
   fi
@@ -267,6 +286,20 @@ drop_copy() {
   log "копия $1 больше не нужна — убрана"
 }
 
+# Ответ моста: пишем в tmp и переименовываем. Красный `>` сначала обрезает файл, а
+# приложение читает response сразу после записи в request — оно успевало увидеть пустой
+# или недописанный ответ и считать проход неудачным.
+write_resp() {
+  uid=$(app_uid)
+  [ -n "$uid" ] || return 0
+  printf '%s\n' "$*" > "$RESP.tmp" 2>/dev/null || return 0
+  chown "$uid:$uid" "$RESP.tmp" 2>/dev/null
+  chmod 600 "$RESP.tmp" 2>/dev/null
+  relabel "$RESP.tmp"
+  mv -f "$RESP.tmp" "$RESP" 2>/dev/null
+  relabel "$RESP"
+}
+
 # $1 — метки, которые просили (пусто = обычный прогон).
 sync_all() {
   want=$1
@@ -298,9 +331,7 @@ sync_all() {
   elif [ "$fail" = "0" ]; then status=ok
   else status=partial
   fi
-  echo "$(date +%s) $status$names" > "$RESP"
-  chown "$uid:$uid" "$RESP" 2>/dev/null; chmod 600 "$RESP" 2>/dev/null
-  relabel "$RESP"
+  write_resp "$(date +%s) $status$names"
   log "sync $status:$names (записано:${wrote:- ничего})"
   return 0
 }
@@ -320,13 +351,31 @@ handle() {
   # Приложение может назвать нужные ему метки вторым полем: "<epoch> rcs".
   # Пустой список = обычный прогон. Старое приложение пишет одно число — оно и
   # попадёт в обычный прогон, то есть совместимость сохраняется.
+  #
+  # Отдельная метка `now` — «прошу прямо сейчас»: приложение просит обновление перед
+  # каждым ответом клиенту, и раньше такая просьба была неотличима от обычной, попадала
+  # под MIN_GAP и молча отбрасывалась. Приложение ждало свой таймаут впустую и оставалось
+  # со старыми копиями. Теперь «сейчас» — это force.
   req=$(head -c 200 "$REQ" 2>/dev/null | tr -d '\n\r')
+  want=""
+  force=0
   case "$req" in
     *\ *) want=${req#* } ;;
-    *)    want="" ;;
   esac
-  if [ -z "$want" ]; then
-    if [ $((now - $(last_sync))) -lt "$MIN_GAP" ]; then return 0; fi
+  keep=""
+  for _w in $want; do
+    if [ "$_w" = "now" ]; then force=1; else keep="$keep $_w"; fi
+  done
+  want=$keep
+  if [ "$force" = "0" ] && [ -z "$want" ]; then
+    age=$((now - $(last_sync)))
+    if [ "$age" -lt "$MIN_GAP" ]; then
+      # Копии и так свежее минуты. Отвечаем, чтобы приложение не ждало впустую: молчание
+      # моста неотличимо от «модуля нет», и проход помечался неудачным.
+      write_resp "$now fresh (копии ${age}s)"
+      trim
+      return 0
+    fi
     echo "$now" > "$STAMP"
   fi
   sync_all "$want"

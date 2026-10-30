@@ -25,8 +25,16 @@ done
 [ -f "$STOPF" ] && exit 0
 
 if [ -n "$TOUCH" ] && [ "$TOUCH_WAS" != "1" ]; then echo 0 > "$TOUCH" 2>/dev/null; fi
-if [ -n "$BL" ] && [ "${BLVAL:-0}" -ge 0 ] 2>/dev/null; then echo "$BLVAL" > "$BL" 2>/dev/null; fi
-settings put system screen_brightness_mode 1 2>/dev/null
-settings put system screen_off_timeout 30000 2>/dev/null
+case "${BLVAL:-}" in ''|*[!0-9]*) : ;; *) [ "$BLVAL" -gt 0 ] && echo "$BLVAL" > "$BL" 2>/dev/null ;; esac
+# Настройки экрана — те, что были у владельца до блокировки (их сохранил blockon).
+S=${STOPF%/*}
+sot=$(cat "$S/sot" 2>/dev/null); bmode=$(cat "$S/bmode" 2>/dev/null)
+case "$sot" in ''|*[!0-9]*) sot=30000 ;; esac
+case "$bmode" in ''|*[!0-9]*) bmode=1 ;; esac
+settings put system screen_off_timeout "$sot" 2>/dev/null
+settings put system screen_brightness_mode "$bmode" 2>/dev/null
+# Стоп-файл гасит и redim_loop. Без этого цикл продолжал писать в sysfs до перезагрузки:
+# watchdog_block выходил, а он — нет, и следующий blockon добавлял ещё один экземпляр.
+touch "$STOPF" 2>/dev/null
 echo "$(date '+%Y-%m-%d %H:%M:%S') watchdog_block: приложение (pid $PID) исчезло — откатил сам" \
   >> "${STOPF%/*}/../answermachine.log" 2>/dev/null

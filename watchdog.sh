@@ -36,10 +36,22 @@ wait_ready() {
   done
 }
 
-perm_granted() { dumpsys package "$PKG" 2>/dev/null | grep -A0 "$1: granted=true" | grep -q "$1"; }
+# Один дамп на цикл. Раньше perm_granted запускал полный `dumpsys package` на КАЖДОЕ из
+# двенадцати разрешений (замер на телефоне: 26–33 мс × 12 ≈ 0,35 с CPU каждые 15 минут).
+# Кэш живёт до конца прохода: assert_all сбрасывает PKG_DUMP_DONE и удаляет файл в конце.
+PKG_DUMP_FILE=/data/local/tmp/.autoresp-pkg-dump
+PKG_DUMP_DONE=0
+pkg_dump() {
+  [ "$PKG_DUMP_DONE" = "1" ] && return 0
+  dumpsys package "$PKG" > "$PKG_DUMP_FILE" 2>/dev/null
+  PKG_DUMP_DONE=1
+  return 0
+}
+perm_granted() { pkg_dump; grep -q "$1: granted=true" "$PKG_DUMP_FILE" 2>/dev/null; }
 
 assert_all() {
   local changed=0
+  PKG_DUMP_DONE=0
 
   # 1) APK установлен?
   if ! app_installed; then
@@ -173,6 +185,7 @@ assert_all() {
   chcon "$ctx" "$health.tmp" 2>/dev/null
   mv -f "$health.tmp" "$health" 2>/dev/null
 
+  rm -f "$PKG_DUMP_FILE" 2>/dev/null
   [ "$changed" = "1" ] && log "state changed -> re-asserted"
   return 0
 }

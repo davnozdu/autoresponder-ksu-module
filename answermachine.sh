@@ -86,10 +86,13 @@ app_uid() { stat -c %u "/data/data/$PKG/files" 2>/dev/null; }
 app_ctx() { ls -dZ "/data/data/$PKG/files" 2>/dev/null | awk '{print $1}'; }
 
 reply() { # <status> <detail> — REQID (id текущей команды) ставит handle() перед разбором
-  printf '%s %s %s %s\n' "$(date +%s)" "$REQID" "$1" "$2" > "$RESP" 2>/dev/null || return
-  u=$(app_uid); [ -n "$u" ] && chown "$u:$u" "$RESP" 2>/dev/null
-  c=$(app_ctx); [ -n "$c" ] && chcon "$c" "$RESP" 2>/dev/null
-  chmod 600 "$RESP" 2>/dev/null
+  # tmp + mv: `>` сперва обрезает resp, а приложение опрашивает его каждые 15 мс и успевает
+  # прочитать пустой файл — ACK теряется, команда выполняется «в никуда».
+  printf '%s %s %s %s\n' "$(date +%s)" "$REQID" "$1" "$2" > "$RESP.tmp" 2>/dev/null || return
+  u=$(app_uid); [ -n "$u" ] && chown "$u:$u" "$RESP.tmp" 2>/dev/null
+  c=$(app_ctx); [ -n "$c" ] && chcon "$c" "$RESP.tmp" 2>/dev/null
+  chmod 600 "$RESP.tmp" 2>/dev/null
+  mv -f "$RESP.tmp" "$RESP" 2>/dev/null
 }
 
 stop_play() {
@@ -113,10 +116,21 @@ play() { # <wav> <loops>
   stop_play
   # devid=0: устройство PAL берёт из активной голосовой сессии.
   "$BIN" "$wav" "$loops" 0 >> "$LOG" 2>&1 &
-  echo $! > "$PIDF"
+  p=$!
+  echo "$p" > "$PIDF"
   echo "$wav $loops" > "$PIDF.args"
-  log "play: $wav x$loops (pid $!)"
-  reply ok "play:$loops"
+  # pal_inject умирает молча, если не открылся PAL-поток (pal_stream_open=-22 — тот же
+  # случай, что описан у recstart). Приложение получало «ok» и считало приветствие
+  # проигранным, абонент слышал тишину. Проверяем живость через 250 мс.
+  sleep 0.25
+  if [ -d "/proc/$p" ]; then
+    log "play: $wav x$loops (pid $p)"
+    reply ok "play:$loops"
+  else
+    log "play: pal_inject завершился сразу (pid $p) — поток не открылся"
+    rm -f "$PIDF" "$PIDF.args"
+    reply err playfailed
+  fi
 }
 
 # Заглушить вывод RX на владельца, оставив тап INCALL_RECORD (запись не проседает).
@@ -135,9 +149,16 @@ play() { # <wav> <loops>
 TFA_MUTE_CTL=294
 muteout() { # on|off
   val=unmute; [ "$1" = "on" ] && val=mute
-  tinymix "$TFA_MUTE_CTL" "$val" >/dev/null 2>&1
-  log "muteout $1 (tinymix $TFA_MUTE_CTL $val)"
-  reply ok "muteout:$1"
+  # Результат проверяем: после обновления прошивки номер контрола может измениться, и
+  # tinymix молча ничего не сделает. Раньше приложение получало «ok» и владелец слышал
+  # разговор, который должен был быть заглушён.
+  if tinymix "$TFA_MUTE_CTL" "$val" >/dev/null 2>&1; then
+    log "muteout $1 (tinymix $TFA_MUTE_CTL $val)"
+    reply ok "muteout:$1"
+  else
+    log "muteout $1: tinymix не сработал, контрол $TFA_MUTE_CTL"
+    reply err "muteout:$1"
+  fi
 }
 
 # KEYCODE_POWER — переключатель, поэтому шлём только если экран сейчас ВКЛЮЧЁН (иначе бы
@@ -173,9 +194,18 @@ find_backlight() { ls /sys/class/backlight/*/brightness 2>/dev/null | head -1; }
 blockon() { # <app_pid>
   pid=$1
   mkdir -p "$ST" 2>/dev/null
+  # Прежние сторожа. Если прошлый звонок закончился без blockoff (приложение убили), то
+  # watchdog_block уже вышел, а redim_loop продолжает писать в sysfs до перезагрузки. И
+  # rm -f "$STOPF" ниже снял бы стоп-файл ровно с уже работающих циклов, оживив их.
+  # Гасим явно и только потом поднимаем новые.
+  touch "$STOPF" 2>/dev/null
+  pkill -f "$MODDIR/redim_loop.sh" 2>/dev/null
+  pkill -f "$MODDIR/watchdog_block.sh" 2>/dev/null
+  sleep 0.2
   rm -f "$STOPF"
   touchp=$(find_touch_inhibit); bl=$(find_backlight)
   blval=-1; [ -n "$bl" ] && blval=$(cat "$bl" 2>/dev/null)
+  case "$blval" in ''|*[!0-9]*) blval=-1 ;; esac
 
   # На этом телефоне тот же узел inhibited держит модуль vr_display_mode/VR Monitor
   # (для VR-гарнитуры). Если тач УЖЕ инхибирован кем-то до нас — это не наша блокировка:
@@ -185,6 +215,15 @@ blockon() { # <app_pid>
   [ -n "$touchp" ] && touch_was=$(cat "$touchp" 2>/dev/null)
   echo "$touchp" > "$ST/touch"; echo "$bl" > "$ST/bl"; echo "$blval" > "$ST/blval"
   echo "$touch_was" > "$ST/touch_was"
+  # Пользовательские настройки экрана сохраняем: blockoff раньше возвращал не то, что было,
+  # а жёсткие «авто-яркость + 30 с». После каждого заблокированного звонка владелец терял
+  # свои значения навсегда.
+  sot=$(settings get system screen_off_timeout 2>/dev/null)
+  bmode=$(settings get system screen_brightness_mode 2>/dev/null)
+  case "$sot" in ''|null|*[!0-9]*) sot=30000 ;; esac
+  case "$bmode" in ''|null|*[!0-9]*) bmode=1 ;; esac
+  echo "$sot" > "$ST/sot"; echo "$bmode" > "$ST/bmode"
+  log "blockon: экран был timeout=$sot brightness_mode=$bmode"
 
   settings put system screen_off_timeout 2147483647 2>/dev/null
   settings put system screen_brightness_mode 0 2>/dev/null
@@ -219,10 +258,15 @@ blockoff() {
   # Тач включаем обратно только если инхибировали его МЫ (см. blockon) — иначе снимем чужую
   # блокировку (VR Monitor).
   if [ -n "$t" ] && [ "$tw" != "1" ]; then echo 0 > "$t" 2>/dev/null; fi
-  if [ -n "$b" ] && [ "${v:-0}" -ge 0 ] 2>/dev/null; then echo "$v" > "$b" 2>/dev/null; fi
-  settings put system screen_brightness_mode 1 2>/dev/null
-  settings put system screen_off_timeout 30000 2>/dev/null
-  log "blockoff: восстановлено"
+  # Яркость — только валидным числом и только если оно было известно до блокировки.
+  case "${v:-}" in ''|*[!0-9]*) : ;; *) [ "$v" -gt 0 ] && echo "$v" > "$b" 2>/dev/null ;; esac
+  # Настройки экрана возвращаем те, что были у владельца, а не зашитые константы.
+  sot=$(cat "$ST/sot" 2>/dev/null); bmode=$(cat "$ST/bmode" 2>/dev/null)
+  case "$sot" in ''|*[!0-9]*) sot=30000 ;; esac
+  case "$bmode" in ''|*[!0-9]*) bmode=1 ;; esac
+  settings put system screen_off_timeout "$sot" 2>/dev/null
+  settings put system screen_brightness_mode "$bmode" 2>/dev/null
+  log "blockoff: восстановлено (timeout=$sot brightness_mode=$bmode)"
   reply ok unblocked
 }
 
@@ -246,7 +290,15 @@ is_bridge_ram() {
   awk -v d="$BRIDGE_DIR" '$5==d && index($0," - tmpfs ")>0 {f=1} END{exit !f}' \
     /proc/self/mountinfo 2>/dev/null
 }
+# Фактический путь буфера фиксируем на recstart и дальше пользуемся им, а не пересчитываем:
+# если мост успел перемонтировать tmpfs (смена uid, неудачный umount), recsave искал файл
+# в другом месте и отвечал nofile — запись разговора оставалась в невидимом слое.
+RECWAVF=$DIR/.recpath
 rec_wav_path() {
+  if [ -s "$RECWAVF" ]; then
+    _p=$(cat "$RECWAVF" 2>/dev/null)
+    case "$_p" in /data/*) echo "$_p"; return ;; esac
+  fi
   if is_bridge_ram; then echo "$BRIDGE_DIR/callrec/rec.wav"
   else echo "$ST/callrec/rec.wav"; fi
 }
@@ -264,6 +316,7 @@ recstart() { # <max_sec>
   [ -x "$REC_BIN" ] || { stage_rec_bin || { reply err nobin; return; }; }
   w=$(rec_wav_path)
   mkdir -p "${w%/*}" 2>/dev/null
+  echo "$w" > "$RECWAVF" 2>/dev/null
   rm -f "$RECSTOPF" "$w"
   "$REC_BIN" "$w" "$maxsec" "$RECSTOPF" 0 >> "$LOG" 2>&1 &
   rpid=$!
@@ -283,10 +336,13 @@ recstop() {
   pid=$(cat "$RECPIDF" 2>/dev/null)
   # Не убиваем сигналом — pal_record должен сам дописать реальные размеры в WAV-заголовок
   # (при старте они неизвестны), иначе файл останется нечитаемым (dataSize=0).
-  i=0
-  while [ -d "/proc/$pid" ] && [ "$i" -lt 15 ]; do sleep 1; i=$((i+1)); done
-  rm -f "$RECPIDF" "$RECSTOPF"
-  log "recstop: done"
+  #
+  # Ждать выхода здесь нельзя: демон однопоточный, и до 15 секунд ожидания держали в
+  # очереди play/muteout следующего звонка, а приложение уже истекало свой ACK.
+  # Стоп-файл уже гарантирует корректный заголовок — ожидание уводим в отдельный процесс.
+  nohup sh -c "i=0; while [ -d /proc/$pid ] && [ \$i -lt 15 ]; do sleep 1; i=\$((i+1)); done; rm -f $RECPIDF $RECSTOPF" \
+    </dev/null >/dev/null 2>&1 &
+  log "recstop: запрошен (pid $pid), ожидание выхода — в фоне"
   reply ok "recstop"
 }
 
@@ -299,7 +355,7 @@ recsave() { # <dst_abspath>
   [ -f "$w" ] || { log "recsave: нет буфера ($w)"; reply err nofile; return; }
   mkdir -p "${dst%/*}" 2>/dev/null
   if cp -f "$w" "$dst" 2>/dev/null; then
-    rm -f "$w"
+    rm -f "$w" "$RECWAVF"
     log "recsave: $w -> $dst"
     reply ok "recsave"
   else
@@ -311,7 +367,7 @@ recsave() { # <dst_abspath>
 # Штатный рекордер сработал — свой буфер больше не нужен, диск не трогаем вовсе.
 recdiscard() {
   w=$(rec_wav_path)
-  rm -f "$w"
+  rm -f "$w" "$RECWAVF"
   log "recdiscard: $w удалён"
   reply ok "recdiscard"
 }
@@ -383,7 +439,16 @@ prepare() {
 
 FIFO="$MODDIR/.req_fifo"
 
-: > "$LOG"; log "answermachine start (pid $$)"
+# Журнал НЕ стираем при старте: причина прошлого падения нужна как раз после перезапуска —
+# раньше `: > "$LOG"` уничтожал улики на каждом рестарте, а crash-loop затирал их повторно.
+# Обрезаем только по размеру.
+if [ -f "$LOG" ]; then
+  sz=$(stat -c %s "$LOG" 2>/dev/null)
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  [ "$sz" -gt 262144 ] && { tail -n 800 "$LOG" > "$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"; }
+fi
+log "answermachine start (pid $$)"
+STARTED=$(date +%s)
 # ОЗУ-буфер (files/bridge/callrec) сам исчезает при перезагрузке — чистить нечего. А вот
 # дисковый fallback ($ST/callrec) мог остаться от аварийно прерванной сессии (краш
 # приложения/модуля между recstart и recsave/recdiscard) — на флеше он бы копился незаметно.
@@ -401,6 +466,14 @@ rm -rf "$ST/callrec" 2>/dev/null
 while :; do
   if ! prepare; then sleep 5; continue; fi
   [ -p "$FIFO" ] || mkfifo "$FIFO" 2>/dev/null
+  # Команда, записанная в момент перезапуска демона, раньше терялась навсегда: inotifyd
+  # сообщает только о НОВЫХ записях. Выполняем её один раз до подписки — но только если она
+  # не старше старта демона, иначе повторилась бы старая recsave/recdiscard прошлого звонка.
+  reqm=$(stat -c %Y "$REQ" 2>/dev/null)
+  case "$reqm" in
+    ''|*[!0-9]*) : ;;
+    *) [ "$reqm" -ge "$STARTED" ] && handle ;;
+  esac
   inotifyd - "$REQ:cew" > "$FIFO" 2>/dev/null &
   INOTPID=$!
   while read -r _ev _rest; do

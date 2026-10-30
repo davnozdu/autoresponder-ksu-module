@@ -20,7 +20,15 @@ while :; do
   apk=$(pm path "$PKG" 2>/dev/null | head -n 1)
   apk=${apk#package:}
   uid=$(stat -c %u "/data/data/$PKG" 2>/dev/null)
-  case "$uid" in ''|*[!0-9]*) sleep 5; continue ;; esac
+  case "$uid" in
+    ''|*[!0-9]*)
+      # Пакета (или его данных) нет — незачем спрашивать `pm path` двенадцать раз в минуту
+      # круглосуточно: 12 fork+exec, и ни одной строки в логе, то есть со стороны это
+      # выглядит как тишина. Хост всё равно поднимется, как только приложение появится.
+      sleep 60
+      continue
+      ;;
+  esac
   if [ -r "$apk" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') starting shell host appUid=$uid apk=$apk" >> "$LOG"
     start=$(date +%s)

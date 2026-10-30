@@ -36,9 +36,13 @@ restore)
   # (и упадёт при старте с EACCES).
   uid=$(stat -c %u "$DATA" 2>/dev/null)
   [ -n "$uid" ] && chown -R "$uid:$uid" "$DATA/databases" "$DATA/shared_prefs" 2>/dev/null
-  restorecon -R "$DATA" 2>/dev/null
+  # Без restorecon: он ставит контекст по file_contexts, то есть s0 БЕЗ категорий приложения
+  # (`...:s0:c27,c257,...`), и после него приложение не открывает собственные файлы — ровно
+  # об этом предупреждают bridge.sh и answermachine.sh. Метку берём с самой папки приложения
+  # и применяем ко всему дереву: категории нужны и files/ (мост, answermachine.sh), а не
+  # только databases/ и shared_prefs/.
   ctx=$(ls -dZ "$DATA" 2>/dev/null | awk '{print $1}')
-  [ -n "$ctx" ] && chcon -R "$ctx" "$DATA/databases" "$DATA/shared_prefs" 2>/dev/null
+  [ -n "$ctx" ] && chcon -R "$ctx" "$DATA" 2>/dev/null
   log "restored history.db + prefs into fresh install"
   ;;
 *)

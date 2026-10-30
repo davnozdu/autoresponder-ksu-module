@@ -11,6 +11,9 @@ case "$next" in ''|*[!0-9]*) next=0 ;; esac
 [ "$now" -lt "$next" ] && exit 0
 echo $((now + 3600)) > "$MODDIR/.module-update-next"
 TMP=$MODDIR/.update-tmp
+# Чистим каталог до работы: при неудачной загрузке недокачанный zip раньше оставался в нём
+# навсегда и копился по попытке (удалялся только на успешном пути).
+rm -rf "$TMP" 2>/dev/null
 mkdir -p "$TMP"
 status() { echo "$*" > "$MODDIR/update-status"; echo "update: $*"; }
 dl() { curl -fLsS --proto '=https' --max-time 120 -o "$2" "$1"; }
