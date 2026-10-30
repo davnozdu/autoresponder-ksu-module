@@ -177,13 +177,25 @@ assert_all() {
     echo "Модуль: $(sed -n 's/^version=//p' "$MODDIR/module.prop")"
     cat "$MODDIR/update-status" 2>/dev/null
     df -h /data/data/$PKG/files/bridge 2>/dev/null | tail -1
-  } > "$health.tmp"
+  } > "$health.tmp" 2>/dev/null || log "health: не удалось создать $health.tmp"
   uid=$(stat -c %u /data/data/$PKG/files 2>/dev/null)
   ctx=$(ls -dZ /data/data/$PKG/files 2>/dev/null | awk '{print $1}')
   chown "$uid:$uid" "$health.tmp" 2>/dev/null
   chmod 600 "$health.tmp" 2>/dev/null
   chcon "$ctx" "$health.tmp" 2>/dev/null
-  mv -f "$health.tmp" "$health" 2>/dev/null
+  if ! mv -f "$health.tmp" "$health" 2>/dev/null; then
+    # Переименование может не пройти (метка SELinux, чужой владелец у старого файла) — тогда
+    # пишем поверх. Раньше обе операции были заглушены в /dev/null, и health молча оставался
+    # от прошлой загрузки: на телефоне после установки v0.4.5 файл показывал v0.4.4.
+    if cat "$health.tmp" > "$health" 2>/dev/null; then
+      chown "$uid:$uid" "$health" 2>/dev/null
+      chcon "$ctx" "$health" 2>/dev/null
+      log "health: mv не прошёл, записал поверх"
+    else
+      log "health: не удалось обновить $health"
+    fi
+    rm -f "$health.tmp" 2>/dev/null
+  fi
 
   rm -f "$PKG_DUMP_FILE" 2>/dev/null
   [ "$changed" = "1" ] && log "state changed -> re-asserted"
