@@ -198,8 +198,30 @@ copy_file() {
     last=$(stat -c %Y "$dstf" 2>/dev/null || echo 0)
     if [ $(( $(date +%s) - last )) -lt "$HEAVY_GAP" ]; then return 1; fi
   fi
-  cp -f "$src" "$dstf" 2>/dev/null || return 2
-  echo "$fp" > "$stampf"
+  # Снимок во временный файл и переименование: приложение открывает копию в любой момент, а
+  # `cp` пишет прямо в неё — недописанный файл читается как «database disk image is malformed»
+  # (31.10 07:14 и 07:24, Telegram). Переименование атомарно: читатель видит либо прежнюю
+  # копию целиком, либо новую целиком.
+  # Отпечаток источника сверяем до и после копии: если база менялась, пока мы её снимали,
+  # снимок рваный даже как целый файл — пробуем ещё (до трёх раз). Если источник не унялся,
+  # а прежняя копия на месте, оставляем её: целый старый снимок лучше свежего битого.
+  tmp="$dstf.tmp.$$"
+  try_n=0
+  while :; do
+    try_n=$((try_n + 1))
+    fp_before=$(fingerprint "$src")
+    cp -f "$src" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 2; }
+    fp_after=$(fingerprint "$src")
+    [ "$fp_before" = "$fp_after" ] && break
+    [ "$try_n" -ge 3 ] && break
+  done
+  if [ "$fp_before" != "$fp_after" ] && [ -f "$dstf" ]; then
+    rm -f "$tmp" 2>/dev/null
+    log "копия $(basename "$src"): источник не унялся за 3 попытки — оставил прежний снимок"
+    return 1
+  fi
+  mv -f "$tmp" "$dstf" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 2; }
+  echo "$fp_after" > "$stampf"
   return 0
 }
 
@@ -446,6 +468,10 @@ prepare() {
   [ -f "$REQ" ] || : > "$REQ"
   chown "$uid:$uid" "$REQ"; chmod 600 "$REQ"
   relabel "$DIR"
+  # Недописанные снимки прошлого запуска (копия в `<файл>.tmp.<pid>`, см. copy_file): процесс
+  # могли убить посреди копирования, и в tmpfs остался бы мусор на сотни мегабайт — ровно тот
+  # «хвост», который ищут в проверках чистоты.
+  rm -f "$DIR"/*/*.tmp.* 2>/dev/null
   return 0
 }
 
