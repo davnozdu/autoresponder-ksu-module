@@ -62,17 +62,12 @@ if ! CLASSPATH="$installed_apk" app_process /system/bin com.davnozdu.autorespond
   rm -rf "$UPD"
   exit 0
 fi
-h1=$(sha256sum "$UPD/ar.apk" 2>/dev/null | cut -d' ' -f1)
-cp "$installed_apk" "$MODDIR/previous.apk" || exit 0
-cp -f "$UPD/ar.apk" /data/local/tmp/ar_upd.apk || { log "copy to tmp failed"; rm -rf "$UPD"; exit 0; }
-h2=$(sha256sum /data/local/tmp/ar_upd.apk 2>/dev/null | cut -d' ' -f1)
-if [ -z "$h1" ] || [ "$h1" != "$h2" ]; then
-  log "APK изменился после проверки подписи — установка отменена"
-  rm -f /data/local/tmp/ar_upd.apk
-  rm -rf "$UPD"
-  exit 0
-fi
-out=$(pm install -r /data/local/tmp/ar_upd.apk 2>&1)
+cp "$installed_apk" "$MODDIR/previous.apk" || { rm -rf "$UPD"; exit 0; }
+# Ставим потоком напрямую из root-каталога $UPD (без копирования в /data/local/tmp,
+# доступный на запись uid 2000 — закрывает окно TOCTOU между проверкой подписи и установкой).
+sz=$(stat -c %s "$UPD/ar.apk" 2>/dev/null)
+case "$sz" in ''|*[!0-9]*) log "bad apk size"; rm -rf "$UPD"; exit 0 ;; esac
+out=$(pm install -r -S "$sz" < "$UPD/ar.apk" 2>&1)
 if echo "$out" | grep -qi Success; then
   cp "$UPD/ar.apk" "$MODDIR/AutoResponder.apk"
   echo $((now + 86400)) > "$NEXT"
@@ -80,5 +75,4 @@ if echo "$out" | grep -qi Success; then
 else
   log "install failed: $out"
 fi
-rm -f /data/local/tmp/ar_upd.apk
 rm -rf "$UPD"

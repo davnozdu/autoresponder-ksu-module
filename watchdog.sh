@@ -154,9 +154,14 @@ assert_all() {
   # устарел — пере-привязываем listener, система поднимает процесс заново.
   if [ -f "$HB" ]; then
     now=$(date +%s)
-    hb=$(stat -c %Y "$HB" 2>/dev/null || echo 0)
+    hb=$(stat -c %Y "$HB" 2>/dev/null)
+    case "$hb" in ''|*[!0-9]*) hb=0 ;; esac
+    uptime_s=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    case "$uptime_s" in ''|*[!0-9]*) uptime_s=$HB_STALE ;; esac
     age=$((now - hb))
-    if [ "$age" -gt "$HB_STALE" ]; then
+    # После перезагрузки старый heartbeat мог остаться с прошлой сессии (телефон был выключен >30м) —
+    # не поднимаем ложную тревогу, пока uptime меньше HB_STALE.
+    if [ "$uptime_s" -ge "$HB_STALE" ] && [ "$age" -gt "$HB_STALE" ]; then
       cmd notification disallow_listener "$NLS" >/dev/null 2>&1
       cmd notification allow_listener "$NLS" >/dev/null 2>&1
       log "recover: app silent for ${age}s -> listener rebind"; changed=1

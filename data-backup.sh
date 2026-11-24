@@ -48,7 +48,8 @@ restore)
 *)
   # throttle 24ч — база небольшая, но писать её каждые 15 минут незачем
   now=$(date +%s)
-  last=$(cat "$STAMP" 2>/dev/null || echo 0)
+  last=$(cat "$STAMP" 2>/dev/null)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
   [ $((now - last)) -lt 86400 ] && exit 0
   [ -f "$DATA/databases/history.db" ] || exit 0
   mkdir -p "$DST"

@@ -220,10 +220,12 @@ blockon() { # <app_pid>
   # свои значения навсегда.
   sot=$(settings get system screen_off_timeout 2>/dev/null)
   bmode=$(settings get system screen_brightness_mode 2>/dev/null)
+  br=$(settings get system screen_brightness 2>/dev/null)
   case "$sot" in ''|null|*[!0-9]*) sot=30000 ;; esac
   case "$bmode" in ''|null|*[!0-9]*) bmode=1 ;; esac
-  echo "$sot" > "$ST/sot"; echo "$bmode" > "$ST/bmode"
-  log "blockon: экран был timeout=$sot brightness_mode=$bmode"
+  case "$br" in ''|null|*[!0-9]*) br="" ;; esac
+  echo "$sot" > "$ST/sot"; echo "$bmode" > "$ST/bmode"; echo "$br" > "$ST/br"
+  log "blockon: экран был timeout=$sot brightness_mode=$bmode brightness=${br:-?}"
 
   settings put system screen_off_timeout 2147483647 2>/dev/null
   settings put system screen_brightness_mode 0 2>/dev/null
@@ -252,7 +254,10 @@ blockon() { # <app_pid>
 }
 
 blockoff() {
-  touch "$STOPF" 2>/dev/null   # сторож увидит и выйдет сам, не восстанавливая повторно
+  touch "$STOPF" 2>/dev/null   # сторож и redim_loop увидят и выйдут сами
+  # Даём redim_loop.sh (тик 30 мс) завершить текущую итерацию до возврата яркости,
+  # иначе он успевает перезаписать подсветку обратно в 0 сразу после восстановления.
+  sleep 0.06
   t=$(cat "$ST/touch" 2>/dev/null); tw=$(cat "$ST/touch_was" 2>/dev/null)
   b=$(cat "$ST/bl" 2>/dev/null); v=$(cat "$ST/blval" 2>/dev/null)
   # Тач включаем обратно только если инхибировали его МЫ (см. blockon) — иначе снимем чужую
@@ -261,12 +266,13 @@ blockoff() {
   # Яркость — только валидным числом и только если оно было известно до блокировки.
   case "${v:-}" in ''|*[!0-9]*) : ;; *) [ "$v" -gt 0 ] && echo "$v" > "$b" 2>/dev/null ;; esac
   # Настройки экрана возвращаем те, что были у владельца, а не зашитые константы.
-  sot=$(cat "$ST/sot" 2>/dev/null); bmode=$(cat "$ST/bmode" 2>/dev/null)
+  sot=$(cat "$ST/sot" 2>/dev/null); bmode=$(cat "$ST/bmode" 2>/dev/null); br=$(cat "$ST/br" 2>/dev/null)
   case "$sot" in ''|*[!0-9]*) sot=30000 ;; esac
   case "$bmode" in ''|*[!0-9]*) bmode=1 ;; esac
   settings put system screen_off_timeout "$sot" 2>/dev/null
+  case "$br" in ''|*[!0-9]*) : ;; *) settings put system screen_brightness "$br" 2>/dev/null ;; esac
   settings put system screen_brightness_mode "$bmode" 2>/dev/null
-  log "blockoff: восстановлено (timeout=$sot brightness_mode=$bmode)"
+  log "blockoff: восстановлено (timeout=$sot brightness_mode=$bmode brightness=${br:-?})"
   reply ok unblocked
 }
 
@@ -340,7 +346,9 @@ recstop() {
   # Ждать выхода здесь нельзя: демон однопоточный, и до 15 секунд ожидания держали в
   # очереди play/muteout следующего звонка, а приложение уже истекало свой ACK.
   # Стоп-файл уже гарантирует корректный заголовок — ожидание уводим в отдельный процесс.
-  nohup sh -c "i=0; while [ -d /proc/$pid ] && [ \$i -lt 15 ]; do sleep 1; i=\$((i+1)); done; rm -f $RECPIDF $RECSTOPF" \
+  # Проверяем совпадение PID перед удалением: если за время ожидания стартовал новый звонок,
+  # не удаляем чужие $RECPIDF/$RECSTOPF.
+  nohup sh -c "i=0; while [ -d /proc/$pid ] && [ \$i -lt 15 ]; do sleep 1; i=\$((i+1)); done; [ \"\$(cat '$RECPIDF' 2>/dev/null)\" = '$pid' ] && rm -f '$RECPIDF' '$RECSTOPF'" \
     </dev/null >/dev/null 2>&1 &
   log "recstop: запрошен (pid $pid), ожидание выхода — в фоне"
   reply ok "recstop"
@@ -352,6 +360,14 @@ recsave() { # <dst_abspath>
   dst=$1
   w=$(rec_wav_path)
   [ -n "$dst" ] || { reply err nopath; return; }
+  # Если pal_record ещё финализирует WAV-заголовок после recstop — коротко ждём выхода.
+  if [ -f "$RECPIDF" ]; then
+    _rpid=$(cat "$RECPIDF" 2>/dev/null)
+    _w=0
+    while [ -n "$_rpid" ] && [ -d "/proc/$_rpid" ] && [ "$_w" -lt 30 ]; do
+      sleep 0.1; _w=$((_w + 1))
+    done
+  fi
   [ -f "$w" ] || { log "recsave: нет буфера ($w)"; reply err nofile; return; }
   mkdir -p "${dst%/*}" 2>/dev/null
   if cp -f "$w" "$dst" 2>/dev/null; then

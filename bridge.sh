@@ -347,15 +347,30 @@ copy_db() {
   return 0
 }
 
+# Блокировка между sync_all и фоновым idle_drop: без неё idle_drop мог удалить тяжёлый
+# файл или .tmp.<pid> прямо во время copy_db.
+SYNC_LOCK="$MODDIR/.bridge-sync-lock"
+acquire_lock() {
+  _w=0
+  while ! mkdir "$SYNC_LOCK" 2>/dev/null; do
+    _w=$((_w + 1))
+    [ "$_w" -ge 50 ] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+release_lock() { rmdir "$SYNC_LOCK" 2>/dev/null; }
+
 # Отпустить тяжёлые копии в простое: приложение давно ничего не просило, значит снимок
-# Telegram на 350 МБ лежит в ОЗУ без дела. Удаляем только сами файлы и отпечаток — папки,
-# владелец и метка остаются, а первая же просьба скопирует заново (0,6 с).
+# Telegram на 350 МБ лежит в ОЗУ без дела. Удаляем тяжёлый файл вместе с его -wal/-shm/-journal
+# и отпечатками — папки, владелец и метка остаются, а первая же просьба скопирует заново (0,6 с).
 idle_drop() {
   [ -d "$DIR" ] || return 0
   now=$(date +%s)
   last=$(cat "$MODDIR/.last-now" 2>/dev/null | tr -dc '0-9')
   [ -n "$last" ] || last=$now          # просьб ещё не было — считаем от старта
   [ $(( now - last )) -ge "$IDLE_DROP" ] || return 0
+  mkdir "$SYNC_LOCK" 2>/dev/null || return 0
   freed=0
   for _d in "$DIR"/*; do
     [ -d "$_d" ] || continue
@@ -364,14 +379,16 @@ idle_drop() {
     _tagfreed=0
     for _f in "$_d"/*; do
       [ -f "$_f" ] || continue
+      case "$_f" in *.tmp.*) continue ;; esac
       _sz=$(stat -c %s "$_f" 2>/dev/null) || continue
       [ "$_sz" -ge "$HEAVY_BYTES" ] || continue
-      rm -f "$_f" 2>/dev/null && { freed=$((freed + _sz)); _tagfreed=1; }
+      rm -f "$_f" "$_f-wal" "$_f-shm" "$_f-journal" 2>/dev/null && { freed=$((freed + _sz)); _tagfreed=1; }
     done
     # Отпечаток без файла заставил бы stage_file пересчитать заново — и это правильно,
-    # но заодно удаляем, чтобы не осталось следа «копия есть».
-    [ "$_tagfreed" = "1" ] && rm -f "$MODDIR/.src-$_tag" 2>/dev/null
+    # но заодно удаляем оба отпечатка, чтобы не осталось следа «копия есть».
+    [ "$_tagfreed" = "1" ] && rm -f "$MODDIR/.src-$_tag" "$MODDIR/.src-$_tag-wal" 2>/dev/null
   done
+  release_lock
   [ "$freed" -gt 0 ] && log "простой ${IDLE_DROP}с: тяжёлые копии отпущены, освобождено $((freed / 1048576)) МБ ОЗУ"
   return 0
 }
@@ -490,16 +507,21 @@ handle() {
   LAST_REQ=$req
   want=""
   force=0
+  is_timer=0
   case "$req" in
     *\ *) want=${req#* } ;;
   esac
   keep=""
   for _w in $want; do
-    if [ "$_w" = "now" ]; then force=1; else keep="$keep $_w"; fi
+    if [ "$_w" = "now" ]; then force=1
+    elif [ "$_w" = "timer" ]; then is_timer=1
+    else keep="$keep $_w"
+    fi
   done
   want=$keep
-  # Отметка «приложение просило только что» — по ней отпускаем тяжёлые копии в простое.
-  [ "$force" = "1" ] && echo "$now" > "$MODDIR/.last-now" 2>/dev/null
+  # Отметка «приложение просило недавно» — по ней отпускаем тяжёлые копии в простое.
+  # Обновляем на ЛЮБУЮ просьбу приложения (и обычную, и `now`), но не на фоновый часовой таймер.
+  [ "$is_timer" = "0" ] && echo "$now" > "$MODDIR/.last-now" 2>/dev/null
   if [ "$force" = "0" ] && [ -z "$want" ]; then
     age=$((now - $(last_sync)))
     if [ "$age" -lt "$MIN_GAP" ]; then
@@ -511,7 +533,12 @@ handle() {
     fi
     echo "$now" > "$STAMP"
   fi
-  sync_all "$want"
+  if acquire_lock; then
+    sync_all "$want"
+    release_lock
+  else
+    log "sync: не дождался блокировки idle_drop — пропуск"
+  fi
   trim
 }
 
@@ -522,9 +549,16 @@ prepare() {
   [ -n "$uid" ] || return 1
   mkdir -p "$DIR" || return 1
   chown "$uid:$uid" "$DIR"; chmod 700 "$DIR"
-  [ -f "$REQ" ] || : > "$REQ"
-  chown "$uid:$uid" "$REQ"; chmod 600 "$REQ"
   relabel "$DIR"
+  if [ ! -f "$REQ" ]; then
+    : > "$REQ.init" 2>/dev/null
+    chown "$uid:$uid" "$REQ.init" 2>/dev/null; chmod 600 "$REQ.init" 2>/dev/null
+    relabel "$REQ.init"
+    mv -f "$REQ.init" "$REQ" 2>/dev/null
+  else
+    chown "$uid:$uid" "$REQ" 2>/dev/null; chmod 600 "$REQ" 2>/dev/null
+    relabel "$REQ"
+  fi
   # Недописанные снимки прошлого запуска (копия в `<файл>.tmp.<pid>`, см. stage_file): процесс
   # могли убить посреди копирования, и в tmpfs остался бы мусор на сотни мегабайт — ровно тот
   # «хвост», который ищут в проверках чистоты.
@@ -537,14 +571,16 @@ prepare() {
 # на телефоне — иначе пришлось бы ждать пять минут до ближайшего тика).
 if [ "$1" = "--idle-drop" ]; then idle_drop; exit 0; fi
 
+rmdir "$SYNC_LOCK" 2>/dev/null
 : > "$LOG"; log "bridge start (pid $$)"
 
-# Таймер в фоне — трогает request, чем будит ту же ветку, что и приложение.
+# Таймер в фоне — пишет новую метку в request (а не просто touch, иначе LAST_REQ отбросит
+# дубль содержимого), чем будит ту же ветку, что и приложение.
 # Нужен на случай, когда приложение убито: копии всё равно остаются свежими.
 (
   while :; do
     sleep "$FORCE_EVERY"
-    [ -f "$REQ" ] && touch "$REQ" 2>/dev/null
+    [ -f "$REQ" ] && echo "$(date +%s) timer" > "$REQ" 2>/dev/null
   done
 ) &
 
